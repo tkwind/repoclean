@@ -12,7 +12,6 @@ def get_fix_targets(repo_path: Path):
     junk_files = []
 
     for p in repo_path.rglob("*"):
-        # skip .git entirely
         if ".git" in p.parts:
             continue
 
@@ -25,7 +24,6 @@ def get_fix_targets(repo_path: Path):
             if p.name in JUNK_FILES or p.suffix == ".pyc":
                 junk_files.append(p)
 
-    # remove nested duplicates (if we delete a dir, don't list children)
     junk_dirs = sorted(set(junk_dirs), key=lambda x: len(str(x)))
     junk_files = sorted(set(junk_files))
 
@@ -36,7 +34,6 @@ def apply_fix(junk_dirs, junk_files):
     removed_dirs = 0
     removed_files = 0
 
-    # 1) delete files first
     for f in junk_files:
         if f.exists():
             try:
@@ -45,7 +42,6 @@ def apply_fix(junk_dirs, junk_files):
             except Exception:
                 pass
 
-    # 2) delete dirs after
     for d in junk_dirs:
         if d.exists():
             shutil.rmtree(d, ignore_errors=True)

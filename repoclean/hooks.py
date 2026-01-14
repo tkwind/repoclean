@@ -40,13 +40,11 @@ def install_pre_commit_hook(repo_path: str = ".") -> tuple[bool, str]:
         if HOOK_MARKER_BEGIN in existing and HOOK_MARKER_END in existing:
             return True, "repoclean pre-commit hook already installed."
 
-        # append safely
         new_content = existing.rstrip() + "\n\n" + content
         hook_path.write_text(new_content, encoding="utf-8")
     else:
         hook_path.write_text(content, encoding="utf-8")
 
-    # make executable (best-effort on windows)
     try:
         hook_path.chmod(0o755)
     except Exception:

@@ -45,16 +45,13 @@ def scan_repo(repo_path: str = ".", max_file_mb: int = DEFAULT_MAX_FILE_MB) -> S
     for root, dirs, files in os.walk(repo):
         root_path = Path(root)
 
-        # Avoid scanning .git itself
         if ".git" in dirs:
             dirs.remove(".git")
 
-        # Record junk dirs
         for d in list(dirs):
             if d in JUNK_DIRS:
                 junk_dirs.append(str((root_path / d).relative_to(repo)))
 
-        # Record files
         for f in files:
             fp = root_path / f
             rel = str(fp.relative_to(repo))

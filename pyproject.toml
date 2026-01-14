@@ -3,8 +3,8 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "repoclean"
-version = "0.2.0"
+name = "repoclean-cli"
+version = "0.2.1"
 description = "Repo hygiene scanner and fixer (junk files, secrets, gitignore)."
 readme = "README.md"
 requires-python = ">=3.9"

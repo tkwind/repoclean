@@ -7,6 +7,9 @@ from pathlib import Path
 
 from repoclean.scanner import scan_repo
 from repoclean.rules import DEFAULT_MAX_FILE_MB
+from pathlib import Path
+from repoclean.fixer import get_fix_targets, apply_fix
+
 
 console = Console()
 
@@ -15,6 +18,49 @@ def format_size(num_bytes: int) -> str:
     mb = num_bytes / (1024 * 1024)
     return f"{mb:.1f} MB"
 
+def cmd_fix(args):
+    repo = Path(args.path).resolve()
+
+    junk_dirs, junk_files = get_fix_targets(repo)
+
+    if not junk_dirs and not junk_files:
+        console.print("[bold green]✅ Nothing to clean. Repo already clean.[/bold green]")
+        return
+
+    console.print("\n[bold]Fix Preview:[/bold]")
+    console.print(f"Junk folders to remove: [yellow]{len(junk_dirs)}[/yellow]")
+    console.print(f"Junk files to remove: [yellow]{len(junk_files)}[/yellow]\n")
+
+    if args.verbose:
+        if junk_dirs:
+            console.print("[bold]Folders:[/bold]")
+            for d in junk_dirs[:50]:
+                console.print(f"  - {d.relative_to(repo).as_posix()}")
+            if len(junk_dirs) > 50:
+                console.print(f"  ... and {len(junk_dirs)-50} more")
+
+        if junk_files:
+            console.print("\n[bold]Files:[/bold]")
+            for f in junk_files[:50]:
+                console.print(f"  - {f.relative_to(repo)}")
+            if len(junk_files) > 50:
+                console.print(f"  ... and {len(junk_files)-50} more")
+
+    if args.dry_run:
+        console.print("\n[bold cyan]Dry-run mode: no changes made.[/bold cyan]")
+        return
+
+    if not args.yes:
+        choice = input("\nProceed with deletion? (y/N): ").strip().lower()
+        if choice != "y":
+            console.print("[bold yellow]Cancelled.[/bold yellow]")
+            return
+
+    removed_dirs, removed_files = apply_fix(junk_dirs, junk_files)
+
+    console.print(
+        f"\n[bold green]✅ Cleaned repo:[/bold green] removed {removed_dirs} folders and {removed_files} files."
+    )
 
 def cmd_init(args):
     repo_path = Path(args.path).resolve()
@@ -73,6 +119,17 @@ def cmd_scan(args):
 def main():
     parser = argparse.ArgumentParser(prog="repoclean", description="Repo hygiene scanner")
     sub = parser.add_subparsers(dest="cmd", required=True)
+    
+    parser = argparse.ArgumentParser(...)
+    parser.add_argument("--version", action="version", version="repoclean 0.1.0")
+
+
+    fix = sub.add_parser("fix", help="Remove common junk files/folders safely")
+    fix.add_argument("--path", default=".", help="Path to repo")
+    fix.add_argument("--dry-run", action="store_true", help="Preview what would be removed")
+    fix.add_argument("--yes", action="store_true", help="Skip confirmation prompt")
+    fix.add_argument("--verbose", action="store_true", help="Print files/folders to be removed")
+    fix.set_defaults(func=cmd_fix)
 
     init = sub.add_parser("init", help="Create a default .gitignore in the repo")
     init.add_argument("--path", default=".", help="Path to repo")

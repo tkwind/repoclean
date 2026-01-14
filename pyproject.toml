@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "repoclean"
+version = "0.1.0"
+description = "Repo hygiene scanner and fixer (junk files, secrets, gitignore)."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [
+  { name = "Trishir Kumar Vind" }
+]
+dependencies = [
+  "rich"
+]
+
+[project.scripts]
+repoclean = "repoclean.cli:main"
+
+[tool.setuptools]
+packages = ["repoclean"]

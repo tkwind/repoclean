@@ -1,9 +1,8 @@
+# Repoclean
+
 ![PyPI](https://img.shields.io/pypi/v/repoclean-cli)
 ![License](https://img.shields.io/github/license/tkwind/repoclean)
 ![CI](https://github.com/tkwind/repoclean/actions/workflows/repoclean.yml/badge.svg)
-
-
-# repoclean
 
 A repo hygiene CLI tool to scan repositories for common junk artifacts, detect secret/token patterns, and optionally install a Git pre-commit hook to prevent leaks.
 

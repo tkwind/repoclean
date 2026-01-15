@@ -52,51 +52,51 @@ def build_pre_commit_script(mode: str = "strict") -> str:
     if mode not in {"strict", "warn"}:
         mode = "strict"
 
-    script = f"""#!/usr/bin/env python3
+    return f"""#!/bin/sh
 {HOOK_MARKER_BEGIN}
+python - <<'PY'
 import json
 import subprocess
 import sys
 
 MODE = {mode!r}
 
-def run():
-    p = subprocess.run(
-        ["repoclean", "ci", "--json"],
-        capture_output=True,
-        text=True,
-    )
+p = subprocess.run(
+    ["repoclean", "ci", "--json"],
+    capture_output=True,
+    text=True,
+)
 
-    out = (p.stdout or "").strip()
+out = (p.stdout or "").strip()
 
-    try:
-        report = json.loads(out) if out else {{}}
-    except Exception:
-        print("repoclean hook: failed to parse JSON output")
-        sys.exit(2)
+try:
+    report = json.loads(out) if out else {{}}
+except Exception:
+    print("repoclean hook: failed to parse JSON output")
+    sys.exit(2)
 
-    failed_secrets = bool(report.get("failed_secrets", False))
-    exit_code = int(report.get("exit_code", p.returncode))
+failed_secrets = bool(report.get("failed_secrets", False))
+exit_code = int(report.get("exit_code", p.returncode))
 
-    if failed_secrets:
-        print("repoclean: secrets detected. Commit blocked.")
-        sys.exit(1)
+if failed_secrets:
+    print("repoclean: secrets detected. Commit blocked.")
+    sys.exit(1)
 
-    if exit_code != 0 and MODE == "strict":
-        print("repoclean: commit blocked (strict mode).")
-        sys.exit(exit_code)
+if exit_code != 0 and MODE == "strict":
+    print("repoclean: commit blocked (strict mode).")
+    sys.exit(exit_code)
 
-    if exit_code != 0 and MODE == "warn":
-        print("repoclean: warning (warn mode). Commit allowed.")
-        sys.exit(0)
-
+if exit_code != 0 and MODE == "warn":
+    print("repoclean: warning (warn mode). Commit allowed.")
     sys.exit(0)
 
-if __name__ == "__main__":
-    run()
+sys.exit(0)
+PY
+status=$?
+exit $status
 {HOOK_MARKER_END}
 """
-    return script
+
 
 
 def write_hook_meta(git_dir: Path, mode: str) -> None:

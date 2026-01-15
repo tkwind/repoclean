@@ -2,14 +2,26 @@ JUNK_DIRS = {
     "__pycache__",
     ".pytest_cache",
     ".mypy_cache",
+    ".ruff_cache",
+    ".coverage",
+    "htmlcov",
     ".idea",
+    ".tox",
+    ".nox",
     ".vscode",
     "node_modules",
     "dist",
     "build",
+    ".ipynb_checkpoints",
     ".venv",
     "venv",
+    ".turbo",
+    ".parcel-cache",
+    ".next",
+    ".nuxt",
 }
+
+JUNK_FILE_EXTS = {".pyc", ".log", ".tmp", ".swp"}
 
 JUNK_FILES = {
     ".DS_Store",

@@ -35,23 +35,36 @@ def cmd_ci(args):
     max_mb = cfg.max_file_mb
     max_kb = cfg.max_secret_file_kb
 
+    fail_on = {x.strip().lower() for x in args.fail_on.split(",") if x.strip()}
+
     scan_result = scan_repo(repo_path=args.path, max_file_mb=max_mb, config=cfg)
-    secret_findings = scan_secrets(repo_path=args.path, max_kb=max_kb, config=cfg)
 
-    failed_scan = (len(scan_result.sensitive_files) > 0) or (len(scan_result.large_files) > 0)
-    failed_secrets = len(secret_findings) > 0
+    secret_findings = scan_secrets(
+        repo_path=args.path,
+        max_kb=max_kb,
+        config=cfg,
+        min_severity=args.secrets_min_severity,
+    )
 
-    exit_code = 0
-    if failed_scan or failed_secrets:
-        exit_code = 1
+    failed_junk = ("junk" in fail_on) and ((len(scan_result.junk_dirs) + len(scan_result.junk_files)) > 0)
+    failed_sensitive = ("sensitive" in fail_on) and (len(scan_result.sensitive_files) > 0)
+    failed_large = ("large" in fail_on) and (len(scan_result.large_files) > 0)
+    failed_secrets = ("secrets" in fail_on) and (len(secret_findings) > 0)
+
+    exit_code = 1 if (failed_junk or failed_sensitive or failed_large or failed_secrets) else 0
 
     if args.json:
         payload = {
             "repo_path": str(scan_result.repo_path),
             "scan": scanresult_to_dict(scan_result),
             "secrets": secrets_to_dict(secret_findings),
-            "failed_scan": failed_scan,
-            "failed_secrets": failed_secrets,
+            "fail_on": sorted(fail_on),
+            "failed": {
+                "junk": failed_junk,
+                "sensitive": failed_sensitive,
+                "large": failed_large,
+                "secrets": failed_secrets,
+            },
             "exit_code": exit_code,
         }
         print(to_json(payload))
@@ -59,6 +72,9 @@ def cmd_ci(args):
 
     console.print("\nrepoclean CI summary\n")
     console.print(f"Repo: {scan_result.repo_path}")
+    console.print(f"Fail-on: {', '.join(sorted(fail_on)) if fail_on else '(none)'}")
+
+    console.print(f"Junk items: {len(scan_result.junk_dirs) + len(scan_result.junk_files)}")
     console.print(f"Sensitive files: {len(scan_result.sensitive_files)}")
     console.print(f"Large files: {len(scan_result.large_files)}")
     console.print(f"Secrets found: {len(secret_findings)}")
@@ -69,6 +85,7 @@ def cmd_ci(args):
         console.print("\nCI status: FAIL")
 
     raise SystemExit(exit_code)
+
 
 
 def cmd_uninstall_hook(args):
@@ -359,6 +376,18 @@ def main():
     ci = sub.add_parser("ci", help="Run repoclean checks for CI pipelines")
     ci.add_argument("--path", default=".", help="Path to repo")
     ci.add_argument("--json", action="store_true", help="Output JSON report")
+    ci.add_argument(
+    "--fail-on",
+    default="secrets,sensitive,large",
+    help="Comma-separated categories to fail on: junk,sensitive,large,secrets",
+    )
+
+    ci.add_argument(
+        "--secrets-min-severity",
+        choices=SEVERITY_LEVELS,
+        default="low",
+        help="Minimum severity for secrets reporting/failing",
+    )
     ci.set_defaults(func=cmd_ci)
 
     args = parser.parse_args()

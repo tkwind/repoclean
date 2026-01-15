@@ -56,6 +56,11 @@ def build_pre_commit_script(mode: str = "strict") -> str:
     if mode not in {"strict", "warn"}:
         mode = "strict"
 
+    if mode == "strict":
+        fail_on = "junk,sensitive,large,secrets"
+    else:
+        fail_on = "secrets"
+
     return f"""#!/bin/sh
 {HOOK_MARKER_BEGIN}
 python - <<'PY'
@@ -64,9 +69,10 @@ import subprocess
 import sys
 
 MODE = {mode!r}
+FAIL_ON = {fail_on!r}
 
 p = subprocess.run(
-    ["repoclean", "ci", "--json"],
+    ["repoclean", "ci", "--json", "--fail-on", FAIL_ON],
     capture_output=True,
     text=True,
 )
@@ -79,17 +85,22 @@ except Exception:
     print("repoclean hook: failed to parse JSON output")
     sys.exit(2)
 
-failed_secrets = bool(report.get("failed_secrets", False))
+failed = report.get("failed", {{}})
+failed_secrets = bool(failed.get("secrets", False))
+
 exit_code = int(report.get("exit_code", p.returncode))
 
+# 1) always block on secrets
 if failed_secrets:
     print("repoclean: secrets detected. Commit blocked.")
     sys.exit(1)
 
+# 2) strict mode blocks on other hygiene issues too
 if exit_code != 0 and MODE == "strict":
-    print("repoclean: commit blocked (strict mode).")
+    print("repoclean: repo hygiene checks failed. Commit blocked (strict mode).")
     sys.exit(exit_code)
 
+# 3) warn mode: let it pass
 if exit_code != 0 and MODE == "warn":
     print("repoclean: warning (warn mode). Commit allowed.")
     sys.exit(0)
@@ -100,6 +111,7 @@ status=$?
 exit $status
 {HOOK_MARKER_END}
 """
+
 
 
 

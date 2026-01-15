@@ -2,19 +2,16 @@
 ![License](https://img.shields.io/github/license/tkwind/repoclean)
 ![CI](https://github.com/tkwind/repoclean/actions/workflows/repoclean.yml/badge.svg)
 
+
+## Demo
+
+![repoclean demo](assets/demo.gif)
+
 # repoclean
 
 A repo hygiene CLI tool to scan repositories for common junk artifacts, detect secret/token patterns, and optionally install a Git pre-commit hook to prevent leaks.
 
 ## Why repoclean exists
-
-Most developers (especially students) accidentally commit junk and sensitive files at least once:
-
-- `__pycache__/`, `*.pyc`, `venv/`, `node_modules/`
-- `.env` files
-- API keys/tokens and private keys
-
-These mistakes are common, embarrassing, and sometimes expensive.
 
 `repoclean` is a small CLI tool meant to be run before pushing to GitHub. It helps you quickly:
 

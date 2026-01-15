@@ -29,6 +29,49 @@ def cmd_install_hook(args):
         console.print(msg)
         raise SystemExit(1)
 
+def cmd_ci(args):
+    cfg = load_config(args.path)
+
+    max_mb = cfg.max_file_mb
+    max_kb = cfg.max_secret_file_kb
+
+    scan_result = scan_repo(repo_path=args.path, max_file_mb=max_mb, config=cfg)
+    secret_findings = scan_secrets(repo_path=args.path, max_kb=max_kb, config=cfg)
+
+    # CI rules (default strictness)
+    failed_scan = (len(scan_result.sensitive_files) > 0) or (len(scan_result.large_files) > 0)
+    failed_secrets = len(secret_findings) > 0
+
+    exit_code = 0
+    if failed_scan or failed_secrets:
+        exit_code = 1
+
+    if args.json:
+        payload = {
+            "repo_path": str(scan_result.repo_path),
+            "scan": scanresult_to_dict(scan_result),
+            "secrets": secrets_to_dict(secret_findings),
+            "failed_scan": failed_scan,
+            "failed_secrets": failed_secrets,
+            "exit_code": exit_code,
+        }
+        print(to_json(payload))
+        raise SystemExit(exit_code)
+
+    # human output
+    console.print("\nrepoclean CI summary\n")
+    console.print(f"Repo: {scan_result.repo_path}")
+    console.print(f"Sensitive files: {len(scan_result.sensitive_files)}")
+    console.print(f"Large files: {len(scan_result.large_files)}")
+    console.print(f"Secrets found: {len(secret_findings)}")
+
+    if exit_code == 0:
+        console.print("\nCI status: PASS")
+    else:
+        console.print("\nCI status: FAIL")
+
+    raise SystemExit(exit_code)
+
 
 def cmd_uninstall_hook(args):
     ok, msg = uninstall_pre_commit_hook(repo_path=args.path)
@@ -81,6 +124,25 @@ def cmd_scan(args):
         console.print("\n[bold yellow]Large files:[/bold yellow]")
         for p, size in sorted(result.large_files, key=lambda x: x[1], reverse=True)[:20]:
             console.print(f"  - {p} ({format_size(size)})")
+    
+    fail_on = {x.strip().lower() for x in args.fail_on.split(",") if x.strip()}
+    fail = False
+
+    if "junk" in fail_on:
+        if (len(result.junk_dirs) + len(result.junk_files)) > 0:
+            fail = True
+
+    if "sensitive" in fail_on:
+        if len(result.sensitive_files) > 0:
+            fail = True
+
+    if "large" in fail_on:
+        if len(result.large_files) > 0:
+            fail = True
+
+    if fail:
+        raise SystemExit(1)
+
 
 
 def cmd_init(args):
@@ -193,6 +255,9 @@ def main():
         description="Repo hygiene scanner"
     )
     parser.add_argument("--version", action="version", version="repoclean 0.1.0")
+    
+
+
 
     sub = parser.add_subparsers(dest="cmd", required=True)
     ih = sub.add_parser("install-hook", help="Install git pre-commit hook to prevent secret leaks")
@@ -213,6 +278,7 @@ def main():
 
 
     scan = sub.add_parser("scan", help="Scan current repo for common issues")
+    scan.add_argument("--fail-on", default="", help="Comma-separated categories to fail on: junk,sensitive,large")
     scan.add_argument("--json", action="store_true", help="Output JSON report")
     scan.add_argument("--path", default=".", help="Path to repo")
     scan.add_argument("--max-mb", type=int, default=None, help="Large file threshold in MB")
@@ -236,6 +302,11 @@ def main():
     sec.add_argument("--max-kb", type=int, default=None, help="Skip files larger than this (KB)")
     sec.add_argument("--fail", action="store_true", help="Exit with code 1 if secrets are found")
     sec.set_defaults(func=cmd_secrets)
+    
+    ci = sub.add_parser("ci", help="Run repoclean checks for CI pipelines")
+    ci.add_argument("--path", default=".", help="Path to repo")
+    ci.add_argument("--json", action="store_true", help="Output JSON report")
+    ci.set_defaults(func=cmd_ci)
 
     args = parser.parse_args()
     args.func(args)

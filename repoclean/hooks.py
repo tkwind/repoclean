@@ -1,6 +1,10 @@
 from pathlib import Path
 import textwrap
-import tomli
+try:
+    import tomllib as tomli
+except ModuleNotFoundError:
+    import tomli
+
 
 
 HOOK_META_FILE = "repoclean_hook.toml"

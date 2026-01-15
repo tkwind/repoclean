@@ -1,7 +1,10 @@
 from dataclasses import dataclass, field
 from pathlib import Path
+try:
+    import tomllib as tomli
+except ModuleNotFoundError:
+    import tomli
 
-import tomli
 
 
 @dataclass

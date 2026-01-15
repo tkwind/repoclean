@@ -94,12 +94,23 @@ def cmd_init(args):
     gitignore_path.write_text(get_default_gitignore(), encoding="utf-8")
     console.print(f"[bold green] Created .gitignore at:[/bold green] {gitignore_path}")
 
+def cmd_config_init(args):
+    repo = Path(args.path).resolve()
+    cfg_path = repo / ".repoclean.toml"
+
+    if cfg_path.exists() and not args.force:
+        console.print(".repoclean.toml already exists. Use --force to overwrite.")
+        return
+
+    from repoclean.config_template import DEFAULT_REPOCLEAN_TOML
+    cfg_path.write_text(DEFAULT_REPOCLEAN_TOML, encoding="utf-8")
+    console.print(f"Created config at: {cfg_path}")
+
 
 def cmd_fix(args):
     repo = Path(args.path).resolve()
-
-    junk_dirs, junk_files = get_fix_targets(repo)
-
+    cfg = load_config(args.path)
+    junk_dirs, junk_files = get_fix_targets(repo, config=cfg)
     if not junk_dirs and not junk_files:
         console.print("[bold green] Nothing to clean. Repo already clean.[/bold green]")
         return
@@ -192,7 +203,14 @@ def main():
     uh.add_argument("--path", default=".", help="Path to repo")
     uh.set_defaults(func=cmd_uninstall_hook)
 
-    
+    cfg = sub.add_parser("config", help="Repoclean configuration utilities")
+    cfg_sub = cfg.add_subparsers(dest="cfg_cmd", required=True)
+
+    cfg_init = cfg_sub.add_parser("init", help="Create a default .repoclean.toml config")
+    cfg_init.add_argument("--path", default=".", help="Path to repo")
+    cfg_init.add_argument("--force", action="store_true", help="Overwrite existing config")
+    cfg_init.set_defaults(func=cmd_config_init)
+
 
     scan = sub.add_parser("scan", help="Scan current repo for common issues")
     scan.add_argument("--json", action="store_true", help="Output JSON report")

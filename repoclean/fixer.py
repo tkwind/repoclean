@@ -2,6 +2,8 @@ import shutil
 from pathlib import Path
 from repoclean.path_utils import rel_posix, should_ignore
 from repoclean.rules import JUNK_DIRS, JUNK_FILES
+import os
+
 
 
 def get_fix_targets(repo: Path, config=None):

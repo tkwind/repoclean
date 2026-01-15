@@ -3,10 +3,6 @@
 ![CI](https://github.com/tkwind/repoclean/actions/workflows/repoclean.yml/badge.svg)
 
 
-## Demo
-
-![repoclean demo](assets/demo.gif)
-
 # repoclean
 
 A repo hygiene CLI tool to scan repositories for common junk artifacts, detect secret/token patterns, and optionally install a Git pre-commit hook to prevent leaks.
@@ -18,6 +14,10 @@ A repo hygiene CLI tool to scan repositories for common junk artifacts, detect s
 - spot repo hygiene issues
 - detect secret/token patterns
 - block accidental leaks via an optional Git pre-commit hook
+
+## Demo
+
+![repoclean demo](assets/demo.gif)
 
 ## Install
 

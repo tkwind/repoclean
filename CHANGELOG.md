@@ -27,3 +27,7 @@
 ## v0.5.1
 
 - Fixed pre-commit hook execution on Windows by using a shell wrapper that invokes Python
+
+## v0.5.2
+
+- Fixed missing tomli dependency on Python 3.10 (GitHub Actions install issue)

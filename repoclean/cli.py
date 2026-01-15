@@ -13,7 +13,7 @@ from repoclean.config_loader import load_config
 
 
 
-
+SEVERITY_LEVELS = ["low", "medium", "high", "critical"]
 console = Console()
 
 
@@ -231,44 +231,72 @@ def cmd_hook_status(args):
 
 
 def cmd_secrets(args):
+    from repoclean.config_loader import load_config
+    from repoclean.secrets import scan_secrets, SEVERITY_ORDER
+
     cfg = load_config(args.path)
+
     max_kb = args.max_kb if args.max_kb is not None else cfg.max_secret_file_kb
-    findings = scan_secrets(repo_path=args.path, max_kb=max_kb, config=cfg)
-    
+
+    findings = scan_secrets(
+    repo_path=args.path,
+    max_kb=max_kb,
+    config=cfg,
+    min_severity=args.min_severity,
+    )
+
+
     if args.json:
         print(to_json(secrets_to_dict(findings)))
-        if args.fail and len(findings) > 0:
-            raise SystemExit(1)
+
+        if getattr(args, "fail_on", None):
+            fail_threshold = SEVERITY_ORDER[args.fail_on]
+            if any(SEVERITY_ORDER[f.severity] >= fail_threshold for f in findings):
+                raise SystemExit(1)
         return
-    
+
     if not findings:
         console.print("\n[bold green] No secret patterns found.[/bold green]")
         return
-    
+
     console.print(f"\n[bold red] Potential secrets found: {len(findings)}[/bold red]\n")
 
     table = Table(title="Secrets Scan", show_lines=True)
+    table.add_column("Severity", style="bold")
     table.add_column("Type", style="bold red")
     table.add_column("File", style="bold")
     table.add_column("Line", justify="right")
     table.add_column("Preview")
-    
 
     for f in findings[:100]:
-        table.add_row(f.kind, f.file, str(f.line), f.preview)
+        table.add_row(
+            f.severity.upper(),
+            f.kind,
+            f.file,
+            str(f.line),
+            f.preview,
+        )
 
     console.print(table)
 
     if len(findings) > 100:
         console.print(f"\n... and {len(findings) - 100} more")
 
-    if args.fail:
-        raise SystemExit(1)
+    if args.fail and not args.fail_on:
+        args.fail_on = "low"
+
+
+
+    if getattr(args, "fail_on", None):
+        fail_threshold = SEVERITY_ORDER[args.fail_on]
+        if any(SEVERITY_ORDER[f.severity] >= fail_threshold for f in findings):
+            raise SystemExit(1)
+
 
 
 def main():
     parser = argparse.ArgumentParser(prog="repoclean", description="Repo hygiene scanner")
-    parser.add_argument("--version", action="version", version="repoclean 0.1.0")
+    parser.add_argument("--version", action="version", version="repoclean 0.6.0")
     
     
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -320,6 +348,8 @@ def main():
     fix.set_defaults(func=cmd_fix)
 
     sec = sub.add_parser("secrets", help="Scan repo for secret/token patterns")
+    sec.add_argument("--min-severity", choices=SEVERITY_LEVELS, default="low", help="Minimum severity to report")
+    sec.add_argument("--fail-on", choices=SEVERITY_LEVELS, default=None, help="Exit with code 1 if findings meet/exceed this severity")
     sec.add_argument("--path", default=".", help="Path to repo")
     sec.add_argument("--json", action="store_true", help="Output JSON report")
     sec.add_argument("--max-kb", type=int, default=None, help="Skip files larger than this (KB)")

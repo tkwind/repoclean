@@ -48,6 +48,14 @@ repoclean fix --yes
 repoclean install-hook --mode strict
 ```
 
+# Secrets severity + CI
+
+```bash
+repoclean secrets --min-severity high
+repoclean secrets --fail-on critical
+repoclean ci --json
+```
+
 # Command
 
 ##### Scan repo hygiene issues

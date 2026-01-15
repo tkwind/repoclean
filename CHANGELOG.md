@@ -31,3 +31,10 @@
 ## v0.5.2
 
 - Fixed missing tomli dependency on Python 3.10 (GitHub Actions install issue)
+
+## v0.6.0
+
+* Added severity levels (`low/medium/high/critical`)
+* Added entropy detection for suspicious high-randomness tokens
+* Added support for more real-world token patterns (GitHub, Slack, Stripe, Telegram, JWT, etc.)
+* Added `--min-severity` and `--fail-on` flags for CI/hook workflows

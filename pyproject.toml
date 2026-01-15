@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "repoclean-cli"
-version = "0.5.0"
+version = "0.5.1"
 description = "Repo hygiene scanner and fixer (junk files, secrets, gitignore)."
 readme = "README.md"
 requires-python = ">=3.9"

@@ -23,3 +23,7 @@
 - Hook now runs `repoclean ci --json`
 - Added `repoclean hook status` and `repoclean hook print`
 - Hook metadata stored in `.git/repoclean_hook.toml`
+
+## v0.5.1
+
+- Fixed pre-commit hook execution on Windows by using a shell wrapper that invokes Python

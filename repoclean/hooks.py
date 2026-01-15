@@ -1,6 +1,9 @@
 from pathlib import Path
+import textwrap
+import tomli
 
 
+HOOK_META_FILE = "repoclean_hook.toml"
 HOOK_MARKER_BEGIN = "# repoclean hook begin"
 HOOK_MARKER_END = "# repoclean hook end"
 
@@ -11,18 +14,108 @@ def find_git_dir(repo_path: Path) -> Path | None:
         return p / ".git"
     return None
 
+def get_hook_status(repo_path: str = ".") -> dict:
+    repo = Path(repo_path).resolve()
+    git_dir = find_git_dir(repo)
 
-def build_pre_commit_script() -> str:
-    return f"""#!/bin/sh
+    status = {
+        "repo_path": str(repo),
+        "has_git": bool(git_dir),
+        "hook_installed": False,
+        "hook_path": "",
+        "mode": "unknown",
+        "has_metadata": False,
+    }
+
+    if not git_dir:
+        return status
+
+    hook_path = git_dir / "hooks" / "pre-commit"
+    status["hook_path"] = str(hook_path)
+
+    if hook_path.exists():
+        txt = hook_path.read_text(encoding="utf-8", errors="ignore")
+        if HOOK_MARKER_BEGIN in txt and HOOK_MARKER_END in txt:
+            status["hook_installed"] = True
+
+    meta = read_hook_meta(git_dir)
+    if meta:
+        status["has_metadata"] = True
+        status["mode"] = str(meta.get("mode", "unknown"))
+
+    return status
+
+
+
+def build_pre_commit_script(mode: str = "strict") -> str:
+    mode = mode.lower().strip()
+    if mode not in {"strict", "warn"}:
+        mode = "strict"
+
+    script = f"""#!/usr/bin/env python3
 {HOOK_MARKER_BEGIN}
-repoclean secrets --fail
-# Optional non-blocking scan summary:
-repoclean scan > /dev/null 2>&1 || true
+import json
+import subprocess
+import sys
+
+MODE = {mode!r}
+
+def run():
+    p = subprocess.run(
+        ["repoclean", "ci", "--json"],
+        capture_output=True,
+        text=True,
+    )
+
+    out = (p.stdout or "").strip()
+
+    try:
+        report = json.loads(out) if out else {{}}
+    except Exception:
+        print("repoclean hook: failed to parse JSON output")
+        sys.exit(2)
+
+    failed_secrets = bool(report.get("failed_secrets", False))
+    exit_code = int(report.get("exit_code", p.returncode))
+
+    if failed_secrets:
+        print("repoclean: secrets detected. Commit blocked.")
+        sys.exit(1)
+
+    if exit_code != 0 and MODE == "strict":
+        print("repoclean: commit blocked (strict mode).")
+        sys.exit(exit_code)
+
+    if exit_code != 0 and MODE == "warn":
+        print("repoclean: warning (warn mode). Commit allowed.")
+        sys.exit(0)
+
+    sys.exit(0)
+
+if __name__ == "__main__":
+    run()
 {HOOK_MARKER_END}
 """
+    return script
 
 
-def install_pre_commit_hook(repo_path: str = ".") -> tuple[bool, str]:
+def write_hook_meta(git_dir: Path, mode: str) -> None:
+    meta_path = git_dir / HOOK_META_FILE
+    meta_path.write_text(f'mode = "{mode}"\n', encoding="utf-8")
+
+
+def read_hook_meta(git_dir: Path) -> dict:
+    meta_path = git_dir / HOOK_META_FILE
+    if not meta_path.exists():
+        return {}
+    try:
+        with meta_path.open("rb") as f:
+            return tomli.load(f)
+    except Exception:
+        return {}
+
+
+def install_pre_commit_hook(repo_path: str = ".", mode: str = "strict") -> tuple[bool, str]:
     repo = Path(repo_path).resolve()
     git_dir = find_git_dir(repo)
     if not git_dir:
@@ -33,17 +126,41 @@ def install_pre_commit_hook(repo_path: str = ".") -> tuple[bool, str]:
 
     hook_path = hooks_dir / "pre-commit"
 
-    content = build_pre_commit_script()
+    content = build_pre_commit_script(mode=mode)
 
     if hook_path.exists():
         existing = hook_path.read_text(encoding="utf-8", errors="ignore")
-        if HOOK_MARKER_BEGIN in existing and HOOK_MARKER_END in existing:
-            return True, "repoclean pre-commit hook already installed."
 
+        # If our block exists -> replace it (update mode in-place)
+        if HOOK_MARKER_BEGIN in existing and HOOK_MARKER_END in existing:
+            start = existing.index(HOOK_MARKER_BEGIN)
+            end = existing.index(HOOK_MARKER_END) + len(HOOK_MARKER_END)
+
+            new_content = (
+                existing[:start].rstrip()
+                + "\n"
+                + content.strip()
+                + "\n"
+                + existing[end:].lstrip()
+            )
+            hook_path.write_text(new_content, encoding="utf-8")
+
+            write_hook_meta(git_dir, mode)
+
+            try:
+                hook_path.chmod(0o755)
+            except Exception:
+                pass
+
+            return True, f"Updated repoclean pre-commit hook mode to {mode}."
+
+        # If hook exists but no repoclean block -> append ours
         new_content = existing.rstrip() + "\n\n" + content
         hook_path.write_text(new_content, encoding="utf-8")
     else:
         hook_path.write_text(content, encoding="utf-8")
+
+    write_hook_meta(git_dir, mode)
 
     try:
         hook_path.chmod(0o755)
@@ -51,6 +168,7 @@ def install_pre_commit_hook(repo_path: str = ".") -> tuple[bool, str]:
         pass
 
     return True, f"Installed pre-commit hook at {hook_path}"
+
 
 
 def uninstall_pre_commit_hook(repo_path: str = ".") -> tuple[bool, str]:
@@ -68,15 +186,22 @@ def uninstall_pre_commit_hook(repo_path: str = ".") -> tuple[bool, str]:
     if HOOK_MARKER_BEGIN not in existing or HOOK_MARKER_END not in existing:
         return False, "No repoclean hook block found in pre-commit hook."
 
-    # remove only our block
     start = existing.index(HOOK_MARKER_BEGIN)
     end = existing.index(HOOK_MARKER_END) + len(HOOK_MARKER_END)
     new_content = (existing[:start] + existing[end:]).strip()
 
     if new_content:
         hook_path.write_text(new_content + "\n", encoding="utf-8")
-        return True, "Removed repoclean block from existing pre-commit hook."
+        msg = "Removed repoclean block from existing pre-commit hook."
     else:
         hook_path.unlink()
-        return True, "Removed pre-commit hook."
+        msg = "Removed pre-commit hook."
 
+    meta_path = git_dir / HOOK_META_FILE
+    if meta_path.exists():
+        try:
+            meta_path.unlink()
+        except Exception:
+            pass
+
+    return True, msg

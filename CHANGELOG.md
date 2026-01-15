@@ -16,3 +16,10 @@
 
 - Added scan gating via `--fail-on` (junk/sensitive/large)
 - Added `repoclean ci` command for CI pipelines with correct exit codes
+
+## v0.5.0
+
+- Improved pre-commit hook with strict/warn modes
+- Hook now runs `repoclean ci --json`
+- Added `repoclean hook status` and `repoclean hook print`
+- Hook metadata stored in `.git/repoclean_hook.toml`

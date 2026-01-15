@@ -22,7 +22,7 @@ def format_size(num_bytes: int) -> str:
     return f"{mb:.1f} MB"
 
 def cmd_install_hook(args):
-    ok, msg = install_pre_commit_hook(repo_path=args.path)
+    ok, msg = install_pre_commit_hook(args.path, mode=args.mode)
     if ok:
         console.print(msg)
     else:
@@ -38,7 +38,6 @@ def cmd_ci(args):
     scan_result = scan_repo(repo_path=args.path, max_file_mb=max_mb, config=cfg)
     secret_findings = scan_secrets(repo_path=args.path, max_kb=max_kb, config=cfg)
 
-    # CI rules (default strictness)
     failed_scan = (len(scan_result.sensitive_files) > 0) or (len(scan_result.large_files) > 0)
     failed_secrets = len(secret_findings) > 0
 
@@ -58,7 +57,6 @@ def cmd_ci(args):
         print(to_json(payload))
         raise SystemExit(exit_code)
 
-    # human output
     console.print("\nrepoclean CI summary\n")
     console.print(f"Repo: {scan_result.repo_path}")
     console.print(f"Sensitive files: {len(scan_result.sensitive_files)}")
@@ -212,6 +210,25 @@ def cmd_fix(args):
         f"\n[bold green] Cleaned repo:[/bold green] removed {removed_dirs} folders and {removed_files} files."
     )
 
+def cmd_hook_print(args):
+    from repoclean.hooks import build_pre_commit_script
+    print(build_pre_commit_script(mode=args.mode))
+
+
+def cmd_hook_status(args):
+    from repoclean.hooks import get_hook_status
+    st = get_hook_status(args.path)
+
+    console.print(f"\nRepo: {st['repo_path']}")
+    console.print(f"Git repo: {'yes' if st['has_git'] else 'no'}")
+    if not st["has_git"]:
+        return
+
+    console.print(f"Hook: {'installed' if st['hook_installed'] else 'not installed'}")
+    console.print(f"Hook path: {st['hook_path']}")
+    console.print(f"Mode: {st['mode']}")
+    console.print(f"Metadata: {'present' if st['has_metadata'] else 'missing'}")
+
 
 def cmd_secrets(args):
     cfg = load_config(args.path)
@@ -250,24 +267,30 @@ def cmd_secrets(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        prog="repoclean",
-        description="Repo hygiene scanner"
-    )
+    parser = argparse.ArgumentParser(prog="repoclean", description="Repo hygiene scanner")
     parser.add_argument("--version", action="version", version="repoclean 0.1.0")
     
-
-
-
+    
     sub = parser.add_subparsers(dest="cmd", required=True)
     ih = sub.add_parser("install-hook", help="Install git pre-commit hook to prevent secret leaks")
+    ih.add_argument("--mode", choices=["strict", "warn"], default="strict", help="Hook mode")
     ih.add_argument("--path", default=".", help="Path to repo")
     ih.set_defaults(func=cmd_install_hook)
 
     uh = sub.add_parser("uninstall-hook", help="Remove repoclean block from git pre-commit hook")
     uh.add_argument("--path", default=".", help="Path to repo")
     uh.set_defaults(func=cmd_uninstall_hook)
-
+    
+    hook = sub.add_parser("hook", help="Hook utilities")
+    hook_sub = hook.add_subparsers(dest="hook_cmd", required=True)
+    hook_print = hook_sub.add_parser("print", help="Print the pre-commit hook script")
+    hook_print.add_argument("--mode", choices=["strict", "warn"], default="strict")
+    hook_print.set_defaults(func=cmd_hook_print)
+    
+    hook_status = hook_sub.add_parser("status", help="Show hook installation status")
+    hook_status.add_argument("--path", default=".")
+    hook_status.set_defaults(func=cmd_hook_status)
+    
     cfg = sub.add_parser("config", help="Repoclean configuration utilities")
     cfg_sub = cfg.add_subparsers(dest="cfg_cmd", required=True)
 

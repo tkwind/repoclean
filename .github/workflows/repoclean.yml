@@ -1,0 +1,21 @@
+name: repoclean
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  repoclean:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install repoclean
+        run: pip install repoclean-cli
+
+      - name: Run repoclean CI
+        run: repoclean ci

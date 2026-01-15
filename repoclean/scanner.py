@@ -29,7 +29,9 @@ def is_sensitive(path: Path) -> bool:
     return False
 
 
-def scan_repo(repo_path: str = ".", max_file_mb: int = DEFAULT_MAX_FILE_MB) -> ScanResult:
+def scan_repo(repo_path: str = ".", max_file_mb: int = DEFAULT_MAX_FILE_MB, config=None) -> ScanResult:
+    from repoclean.path_utils import rel_posix, should_ignore
+
     repo = Path(repo_path).resolve()
 
     has_git = (repo / ".git").exists()
@@ -48,23 +50,56 @@ def scan_repo(repo_path: str = ".", max_file_mb: int = DEFAULT_MAX_FILE_MB) -> S
         if ".git" in dirs:
             dirs.remove(".git")
 
+        if config:
+            pruned = []
+            for d in dirs:
+                rel_dir = rel_posix(repo, root_path / d)
+                if should_ignore(
+                    rel_dir,
+                    ignore_dirs=config.ignore_dirs,
+                    ignore_files=config.ignore_files,
+                    ignore_extensions=config.ignore_extensions,
+                ):
+                    pruned.append(d)
+            for d in pruned:
+                dirs.remove(d)
+
         for d in list(dirs):
             if d in JUNK_DIRS:
-                junk_dirs.append(str((root_path / d).relative_to(repo)))
+                rel_dir = rel_posix(repo, root_path / d)
+
+                if config and should_ignore(
+                    rel_dir,
+                    ignore_dirs=config.ignore_dirs,
+                    ignore_files=config.ignore_files,
+                    ignore_extensions=config.ignore_extensions,
+                ):
+                    continue
+
+                junk_dirs.append(rel_dir)
 
         for f in files:
             fp = root_path / f
-            rel = str(fp.relative_to(repo))
+            rel = rel_posix(repo, fp)
 
-            if f in JUNK_FILES or fp.suffix == ".pyc":
+            if config and should_ignore(
+                rel,
+                ignore_dirs=config.ignore_dirs,
+                ignore_files=config.ignore_files,
+                ignore_extensions=config.ignore_extensions,
+            ):
+                continue
+
+            if f in JUNK_FILES or fp.suffix.lower() == ".pyc":
                 junk_files.append(rel)
 
             if is_sensitive(fp):
                 sensitive_files.append(rel)
 
             try:
-                if fp.stat().st_size > max_bytes:
-                    large_files.append((rel, fp.stat().st_size))
+                size = fp.stat().st_size
+                if size > max_bytes:
+                    large_files.append((rel, size))
             except Exception:
                 pass
 
@@ -77,3 +112,4 @@ def scan_repo(repo_path: str = ".", max_file_mb: int = DEFAULT_MAX_FILE_MB) -> S
         sensitive_files=sorted(set(sensitive_files)),
         large_files=sorted(set(large_files)),
     )
+

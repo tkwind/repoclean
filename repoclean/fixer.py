@@ -1,33 +1,64 @@
 import shutil
 from pathlib import Path
-
+from repoclean.path_utils import rel_posix, should_ignore
 from repoclean.rules import JUNK_DIRS, JUNK_FILES
 
 
-def get_fix_targets(repo_path: Path):
-    """
-    Return (junk_dirs_to_remove, junk_files_to_remove)
-    """
+def get_fix_targets(repo: Path, config=None):
     junk_dirs = []
     junk_files = []
 
-    for p in repo_path.rglob("*"):
-        if ".git" in p.parts:
-            continue
+    for root, dirs, files in os.walk(repo):
+        root_path = Path(root)
 
-        # junk folders
-        if p.is_dir() and p.name in JUNK_DIRS:
-            junk_dirs.append(p)
+        if ".git" in dirs:
+            dirs.remove(".git")
 
-        # junk files
-        if p.is_file():
-            if p.name in JUNK_FILES or p.suffix == ".pyc":
-                junk_files.append(p)
+        if config:
+            pruned = []
+            for d in dirs:
+                rel_dir = rel_posix(repo, root_path / d)
+                if should_ignore(
+                    rel_dir,
+                    ignore_dirs=config.ignore_dirs,
+                    ignore_files=config.ignore_files,
+                    ignore_extensions=config.ignore_extensions,
+                ):
+                    pruned.append(d)
+            for d in pruned:
+                dirs.remove(d)
 
-    junk_dirs = sorted(set(junk_dirs), key=lambda x: len(str(x)))
-    junk_files = sorted(set(junk_files))
+        for d in dirs:
+            if d in JUNK_DIRS:
+                rel_dir = rel_posix(repo, root_path / d)
+
+                if config and should_ignore(
+                    rel_dir,
+                    ignore_dirs=config.ignore_dirs,
+                    ignore_files=config.ignore_files,
+                    ignore_extensions=config.ignore_extensions,
+                ):
+                    continue
+
+                junk_dirs.append(root_path / d)
+
+        for f in files:
+            fp = root_path / f
+            rel = rel_posix(repo, fp)
+
+            if config and should_ignore(
+                rel,
+                ignore_dirs=config.ignore_dirs,
+                ignore_files=config.ignore_files,
+                ignore_extensions=config.ignore_extensions,
+            ):
+                continue
+
+            if f in JUNK_FILES or fp.suffix.lower() == ".pyc":
+                junk_files.append(fp)
 
     return junk_dirs, junk_files
+
 
 
 def apply_fix(junk_dirs, junk_files):

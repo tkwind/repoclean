@@ -36,7 +36,9 @@ def looks_text_file(path: Path) -> bool:
     return path.suffix.lower() in TEXT_FILE_EXTS or path.name == ".env"
 
 
-def scan_secrets(repo_path: str = ".", max_kb: int = 256) -> list[SecretFinding]:
+def scan_secrets(repo_path: str = ".", max_kb: int = 256, config=None) -> list[SecretFinding]:
+    from repoclean.path_utils import rel_posix, should_ignore, is_allowlisted
+
     repo = Path(repo_path).resolve()
     findings: list[SecretFinding] = []
 
@@ -50,6 +52,16 @@ def scan_secrets(repo_path: str = ".", max_kb: int = 256) -> list[SecretFinding]
         if not looks_text_file(p):
             continue
 
+        rel = rel_posix(repo, p)
+
+        if config and should_ignore(
+            rel,
+            ignore_dirs=config.ignore_dirs,
+            ignore_files=config.ignore_files,
+            ignore_extensions=config.ignore_extensions,
+        ):
+            continue
+
         try:
             if p.stat().st_size > max_kb * 1024:
                 continue
@@ -61,13 +73,17 @@ def scan_secrets(repo_path: str = ".", max_kb: int = 256) -> list[SecretFinding]
         except Exception:
             continue
 
-        rel = str(p.relative_to(repo)).replace("\\", "/")
+        allowlisted = bool(config) and is_allowlisted(rel, config.allow_secrets_in)
+
         lines = text.splitlines()
 
         for idx, line in enumerate(lines, start=1):
             for kind, rgx in SECRET_PATTERNS:
                 m = rgx.search(line)
                 if not m:
+                    continue
+
+                if allowlisted:
                     continue
 
                 match_text = m.group(0)

@@ -9,6 +9,8 @@ from repoclean.secrets import scan_secrets
 from repoclean.rules import DEFAULT_MAX_FILE_MB
 from repoclean.serializer import to_json, scanresult_to_dict, secrets_to_dict
 from repoclean.hooks import install_pre_commit_hook, uninstall_pre_commit_hook
+from repoclean.config_loader import load_config
+
 
 
 
@@ -37,7 +39,9 @@ def cmd_uninstall_hook(args):
         raise SystemExit(1)
 
 def cmd_scan(args):
-    result = scan_repo(repo_path=args.path, max_file_mb=args.max_mb)
+    cfg = load_config(args.path)
+    max_mb = args.max_mb if args.max_mb is not None else cfg.max_file_mb
+    result = scan_repo(repo_path=args.path, max_file_mb=max_mb, config=cfg)
     if args.json:
         print(to_json(scanresult_to_dict(result)))
         return
@@ -54,12 +58,9 @@ def cmd_scan(args):
     table.add_row("Junk folders", str(len(result.junk_dirs)), "Safe to ignore/remove")
     table.add_row("Junk files", str(len(result.junk_files)), "Safe to ignore/remove")
     table.add_row("Sensitive files", str(len(result.sensitive_files)), "Potential secrets")
-    table.add_row("Large files", str(len(result.large_files)), f">{args.max_mb} MB")
-
+    table.add_row("Large files", str(len(result.large_files)), f">{max_mb} MB")
     console.print(table)
-
     
-
     if result.sensitive_files:
         console.print("\n[bold red]Sensitive files found (review immediately):[/bold red]")
         for p in result.sensitive_files[:30]:
@@ -140,7 +141,9 @@ def cmd_fix(args):
 
 
 def cmd_secrets(args):
-    findings = scan_secrets(repo_path=args.path, max_kb=args.max_kb)
+    cfg = load_config(args.path)
+    max_kb = args.max_kb if args.max_kb is not None else cfg.max_secret_file_kb
+    findings = scan_secrets(repo_path=args.path, max_kb=max_kb, config=cfg)
     
     if args.json:
         print(to_json(secrets_to_dict(findings)))
@@ -194,7 +197,7 @@ def main():
     scan = sub.add_parser("scan", help="Scan current repo for common issues")
     scan.add_argument("--json", action="store_true", help="Output JSON report")
     scan.add_argument("--path", default=".", help="Path to repo")
-    scan.add_argument("--max-mb", type=int, default=DEFAULT_MAX_FILE_MB, help="Large file threshold in MB")
+    scan.add_argument("--max-mb", type=int, default=None, help="Large file threshold in MB")
     scan.set_defaults(func=cmd_scan)
 
     init = sub.add_parser("init", help="Create a default .gitignore in the repo")
@@ -212,7 +215,7 @@ def main():
     sec = sub.add_parser("secrets", help="Scan repo for secret/token patterns")
     sec.add_argument("--path", default=".", help="Path to repo")
     sec.add_argument("--json", action="store_true", help="Output JSON report")
-    sec.add_argument("--max-kb", type=int, default=256, help="Skip files larger than this (KB)")
+    sec.add_argument("--max-kb", type=int, default=None, help="Skip files larger than this (KB)")
     sec.add_argument("--fail", action="store_true", help="Exit with code 1 if secrets are found")
     sec.set_defaults(func=cmd_secrets)
 

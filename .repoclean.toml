@@ -1,0 +1,9 @@
+[repoclean]
+max_file_mb = 25
+max_secret_file_kb = 256
+
+ignore_dirs = ["node_modules", "dist", "build"]
+ignore_files = ["output_messages.csv"]
+ignore_extensions = [".log", ".bin"]
+
+allow_secrets_in = ["tests/", "examples/"]

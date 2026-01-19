@@ -4,28 +4,32 @@
 ![License](https://img.shields.io/github/license/tkwind/repoclean)
 ![CI](https://github.com/tkwind/repoclean/actions/workflows/repoclean.yml/badge.svg)
 
+repoclean — Git repo hygiene scanner + secrets detector + pre-commit gatekeeper.
 
-repoclean — GitHub Repo Cleanup & Secret Leak Prevention CLI
+It prevents:
 
-A fast repo hygiene scanner + scary-good secrets detector + pre-commit hook that blocks risky commits automatically.
+- accidental API key/token leaks
+- committing junk artifacts (`__pycache__/`, `.log`, `.tmp`, etc.)
+- committing sensitive files (`.env`, keys)
+- bloating git history with large files
+- tracked junk already inside git history
+
+It can also act as a **gatekeeper**:
+
+- prints a health score (0–100)
+- blocks risky commits (optional git pre-commit hook)
+- CI-friendly JSON output
 
 ## Why repoclean exists
 
+Most leaks don’t happen because people are careless — they happen because shipping is fast and repo hygiene is manual.
 
-Most repo leaks don’t happen because people are careless — they happen because shipping is fast and repo hygiene is manual.
+repoclean is a small CLI tool that acts like a repo bodyguard:
 
-repoclean stops:
-
-- accidental API key/token leaks
-- pushing `.env`, `.pem`, `id_rsa` etc
-- committing junk (`__pycache__/`, `.log`, `.tmp`, `dist/`, etc)
-- committing huge files that bloat history
-
-`repoclean` is a small CLI tool meant to be run before pushing to GitHub. It helps you quickly:
-
-- spot repo hygiene issues
-- detect secret/token patterns
-- block accidental leaks via an optional Git pre-commit hook
+- fast hygiene scan
+- scary-good secrets detection (real-world token patterns + entropy detection)
+- optional git hook that blocks commits automatically
+- staged-only mode so checks stay fast and relevant
 
 ## Demo
 
@@ -42,6 +46,7 @@ pip install repoclean-cli
 ```bash
 repoclean scan
 repoclean secrets
+repoclean gate
 ```
 
 
@@ -59,6 +64,12 @@ repoclean detects:
 - High entropy secret candidates in assignment contexts
 ```
 
+## Recommended: Install commit hook (strict blocks commit on issues):
+
+```bash
+repoclean install-hook --mode strict
+
+```
 
 ## CI usage
 
@@ -84,6 +95,16 @@ repoclean secrets --min-severity high
 repoclean secrets --fail-on critical
 repoclean ci --json
 ```
+
+#### The CI command supports `--fail-on` categories:
+
+* secrets
+* junk
+* sensitive
+* large
+* tracked-junk
+* gitignore
+* env
 
 # Command
 
@@ -143,6 +164,18 @@ Fail mode (useful for CI and hooks):
 repoclean secrets --fail
 ```
 
+#### repoclean detects:
+
+* GitHub tokens (`ghp_`, `github_pat_`, `gho_`)
+* Slack tokens (`xoxb-...`)
+* Stripe live keys (`sk_live_...`)
+* Telegram bot tokens (`123456:ABC...`)
+* JWT tokens
+* OpenAI keys
+* AWS secret access keys
+* Google API keys
+* high-entropy tokens in assignment contexts
+
 ## Install git pre-commit hook
 
 ##### Install (strict mode blocks commit on issues):
@@ -151,11 +184,20 @@ repoclean secrets --fail
 repoclean install-hook --mode strict
 ```
 
+Strict mode blocks commits on:
+
+* secrets
+* junk artifacts
+* sensitive files
+* large files
+
 ##### Install (warn mode prints warnings but allows commit):
 
 ```bash
 repoclean install-hook --mode warn
 ```
+
+Warn mode blocks only secrets
 
 ##### Uninstall:
 

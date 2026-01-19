@@ -1,4 +1,4 @@
-# Repoclean (CLI) v0.7.0
+# Repoclean (CLI) v0.8.0
 
 ![PyPI](https://img.shields.io/pypi/v/repoclean-cli)
 ![License](https://img.shields.io/github/license/tkwind/repoclean)

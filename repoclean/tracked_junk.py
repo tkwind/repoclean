@@ -1,17 +1,10 @@
-# repoclean/tracked_junk.py
 from __future__ import annotations
 
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from repoclean.rules import JUNK_DIRS, JUNK_FILES, JUNK_FILE_EXTS
-
-
-@dataclass
-class TrackedJunkResult:
-    repo_path: Path
-    tracked_junk: list[str]
+from repoclean.rules import get_effective_junk_rules
 
 
 def _git(repo: Path, args: list[str]) -> subprocess.CompletedProcess:
@@ -23,7 +16,11 @@ def _git(repo: Path, args: list[str]) -> subprocess.CompletedProcess:
 
 
 def _get_tracked_paths(repo: Path) -> list[str]:
-    p = _git(repo, ["ls-files"])
+    try:
+        p = _git(repo, ["ls-files"])
+    except Exception:
+        return []
+
     if p.returncode != 0:
         return []
 
@@ -31,97 +28,114 @@ def _get_tracked_paths(repo: Path) -> list[str]:
     if not out:
         return []
 
-    paths: list[str] = []
+    tracked: list[str] = []
     for line in out.splitlines():
         rel = line.strip().replace("\\", "/")
-        if not rel or rel.startswith(".git/"):
+        if not rel:
             continue
-        paths.append(rel)
-    return paths
+        if rel.startswith(".git/"):
+            continue
+        tracked.append(rel)
+
+    return tracked
 
 
-def _is_junk_rel_path(rel_path_posix: str) -> bool:
-    name = rel_path_posix.split("/")[-1]
-    if name in JUNK_FILES:
+def _is_tracked_path_junk(rel_posix: str, *, junk_dirs: set[str], junk_files: set[str], junk_exts: set[str]) -> bool:
+    # rel_posix example: "repoclean/__pycache__/abc.pyc"
+    name = rel_posix.split("/")[-1]
+
+    if name in junk_files:
         return True
 
     suffix = Path(name).suffix.lower()
-    if suffix in JUNK_FILE_EXTS:
+    if suffix and suffix in junk_exts:
         return True
 
-    parts = rel_path_posix.split("/")
+    # junk dirs anywhere in path
+    parts = rel_posix.split("/")
     for part in parts[:-1]:
-        if part in JUNK_DIRS:
+        if part in junk_dirs:
             return True
 
     return False
 
 
-def get_tracked_junk(repo_path: str = ".") -> TrackedJunkResult:
+@dataclass
+class TrackedJunkResult:
+    repo_path: Path
+    tracked_junk: list[str]
+
+
+def get_tracked_junk(repo_path: str = ".", config=None) -> TrackedJunkResult:
+    from repoclean.path_utils import should_ignore
+
     repo = Path(repo_path).resolve()
+    rules = get_effective_junk_rules(config)
 
     tracked = _get_tracked_paths(repo)
-    junk = [p for p in tracked if _is_junk_rel_path(p)]
+    bad: list[str] = []
+
+    for rel in tracked:
+        # keep consistent with scanner: user ignore config wins
+        if config and should_ignore(
+            rel,
+            ignore_dirs=config.ignore_dirs,
+            ignore_files=config.ignore_files,
+            ignore_extensions=config.ignore_extensions,
+        ):
+            continue
+
+        if _is_tracked_path_junk(
+            rel,
+            junk_dirs=rules.dirs,
+            junk_files=rules.files,
+            junk_exts=rules.extensions,
+        ):
+            bad.append(rel)
+
+    bad = sorted(set(bad))
 
     return TrackedJunkResult(
         repo_path=repo,
-        tracked_junk=sorted(set(junk)),
+        tracked_junk=bad,
     )
 
 
-def _ensure_gitignore_contains(repo: Path, lines: list[str]) -> None:
+def remove_tracked_paths(repo: Path, rel_paths: list[str]) -> tuple[int, list[str]]:
     """
-    Minimal helper: appends patterns if missing.
-    (we keep it conservative: don’t rewrite user file)
+    Removes files from git index but keeps them locally.
+    Equivalent to: git rm --cached -- <paths>
     """
-    gi = repo / ".gitignore"
-    if not gi.exists():
-        existing = ""
-    else:
-        existing = gi.read_text(encoding="utf-8", errors="ignore")
-
-    existing_lines = {x.strip() for x in existing.splitlines() if x.strip()}
-    to_add = [x for x in lines if x.strip() and x.strip() not in existing_lines]
-    if not to_add:
-        return
-
-    blob = existing.rstrip() + "\n\n# repoclean tracked junk\n" + "\n".join(to_add) + "\n"
-    gi.write_text(blob, encoding="utf-8")
-
-
-def fix_tracked_junk(repo_path: str = ".", tracked_junk: list[str] | None = None) -> tuple[int, list[str]]:
-    """
-    Removes tracked junk from git index while keeping files on disk.
-    Equivalent to: git rm -r --cached <paths>
-    """
-    repo = Path(repo_path).resolve()
-
-    if tracked_junk is None:
-        tracked_junk = get_tracked_junk(str(repo)).tracked_junk
-
-    if not tracked_junk:
-        return 0, []
+    repo = Path(repo).resolve()
 
     removed: list[str] = []
+    for rel in rel_paths:
+        rel = (rel or "").strip().replace("\\", "/")
+        if not rel:
+            continue
 
-    _ensure_gitignore_contains(
-        repo,
-        [
-            "__pycache__/",
-            "*.pyc",
-            "*.log",
-            "*.tmp",
-            "*.swp",
-            ".DS_Store",
-            "Thumbs.db",
-        ],
-    )
-
-    for rel in tracked_junk:
-        p = _git(repo, ["rm", "-r", "--cached", "--quiet", "--", rel])
+        p = _git(repo, ["rm", "--cached", "--quiet", "--", rel])
         if p.returncode == 0:
             removed.append(rel)
 
-    _git(repo, ["add", ".gitignore"])
+    # stage index updates (so commit reflects removal)
+    if removed:
+        _git(repo, ["add", "-u"])
 
     return len(removed), removed
+
+
+def fix_tracked_junk(repo_path: str = ".", config=None) -> tuple[int, list[str]]:
+    """
+    Convenience wrapper:
+    - detects tracked junk
+    - removes it from index
+    Returns: (removed_count, removed_paths)
+    """
+    repo = Path(repo_path).resolve()
+
+    result = get_tracked_junk(repo_path=str(repo), config=config)
+    if not result.tracked_junk:
+        return 0, []
+
+    return remove_tracked_paths(repo, result.tracked_junk)

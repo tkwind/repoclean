@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from pathlib import Path
 
 try:
@@ -93,14 +95,14 @@ def run_repoclean(args):
 # 0) auto-clean staged junk before commit
 fx = run_repoclean(["fix", "--staged-only", "--yes"])
 if fx.returncode != 0:
-    print("repoclean hook: fix failed")
+    print("repoclean hook: fix failed (exit code %d)" % fx.returncode)
     err = (fx.stderr or fx.stdout or "").strip()
     if err:
         print(err[:2000])
     sys.exit(2)
 
-# 1) run CI checks
-p = run_repoclean(["ci", "--json", "--fail-on", FAIL_ON])
+p = run_repoclean(["gate", "--staged-only", "--mode", MODE])
+
 
 out = (p.stdout or "").strip()
 try:
@@ -116,17 +118,17 @@ failed = report.get("failed", {{}})
 failed_secrets = bool(failed.get("secrets", False))
 exit_code = int(report.get("exit_code", p.returncode))
 
-# 1) always block on secrets
+# always block on secrets
 if failed_secrets:
     print("repoclean: secrets detected. Commit blocked.")
     sys.exit(1)
 
-# 2) strict mode blocks on other hygiene issues too
+# strict blocks on any failing hygiene checks too
 if exit_code != 0 and MODE == "strict":
     print("repoclean: repo hygiene checks failed. Commit blocked (strict mode).")
     sys.exit(exit_code)
 
-# 3) warn mode: let it pass
+# warn mode lets hygiene pass
 if exit_code != 0 and MODE == "warn":
     print("repoclean: warning (warn mode). Commit allowed.")
     sys.exit(0)
@@ -139,7 +141,6 @@ exit $status
 
 {HOOK_MARKER_END}
 """
-
 
 
 def write_hook_meta(git_dir: Path, mode: str) -> None:
@@ -158,6 +159,14 @@ def read_hook_meta(git_dir: Path) -> dict:
         return {}
 
 
+def _is_hook_corrupted(existing_text: str) -> bool:
+    """
+    Quick heuristic:
+    if hook has multiple shebangs, it got appended repeatedly.
+    """
+    return existing_text.count("#!") > 1
+
+
 def install_pre_commit_hook(repo_path: str = ".", mode: str = "strict") -> tuple[bool, str]:
     repo = Path(repo_path).resolve()
     git_dir = find_git_dir(repo)
@@ -168,11 +177,12 @@ def install_pre_commit_hook(repo_path: str = ".", mode: str = "strict") -> tuple
     hooks_dir.mkdir(parents=True, exist_ok=True)
 
     hook_path = hooks_dir / "pre-commit"
-    content = build_pre_commit_script(mode=mode)
+    content = build_pre_commit_script(mode=mode).strip() + "\n"
 
     if hook_path.exists():
         existing = hook_path.read_text(encoding="utf-8", errors="ignore")
 
+        # If our block exists -> replace it in-place
         if HOOK_MARKER_BEGIN in existing and HOOK_MARKER_END in existing:
             start = existing.index(HOOK_MARKER_BEGIN)
             end = existing.index(HOOK_MARKER_END) + len(HOOK_MARKER_END)
@@ -180,8 +190,7 @@ def install_pre_commit_hook(repo_path: str = ".", mode: str = "strict") -> tuple
             new_content = (
                 existing[:start].rstrip()
                 + "\n"
-                + content.strip()
-                + "\n"
+                + content
                 + existing[end:].lstrip()
             )
             hook_path.write_text(new_content, encoding="utf-8")
@@ -194,8 +203,23 @@ def install_pre_commit_hook(repo_path: str = ".", mode: str = "strict") -> tuple
 
             return True, f"Updated repoclean pre-commit hook mode to {mode}."
 
+        # If hook is corrupted (multiple shebangs) -> replace entirely
+        if _is_hook_corrupted(existing):
+            hook_path.write_text(content, encoding="utf-8")
+            write_hook_meta(git_dir, mode)
+
+            try:
+                hook_path.chmod(0o755)
+            except Exception:
+                pass
+
+            return True, "Replaced corrupted pre-commit hook with repoclean hook."
+
+        # Otherwise: existing hook without repoclean block -> APPEND ours
+        # (we don't want to destroy user's hook logic)
         new_content = existing.rstrip() + "\n\n" + content
         hook_path.write_text(new_content, encoding="utf-8")
+
     else:
         hook_path.write_text(content, encoding="utf-8")
 

@@ -47,3 +47,23 @@ def trackedjunk_to_dict(result):
     d["repo_path"] = str(result.repo_path).replace("\\", "/")
     d["tracked_junk"] = [p.replace("\\", "/") for p in d.get("tracked_junk", [])]
     return d
+
+def gate_to_dict(payload: dict) -> dict:
+    """
+    Gate payload is already dict-like but we normalize paths to posix.
+    """
+    def _posix(s):
+        return (s or "").replace("\\", "/")
+
+    out = dict(payload)
+
+    if "repo_path" in out:
+        out["repo_path"] = _posix(out["repo_path"])
+
+    if "actions" in out and isinstance(out["actions"], list):
+        out["actions"] = [str(x) for x in out["actions"]]
+
+    if "suggestions" in out and isinstance(out["suggestions"], list):
+        out["suggestions"] = [str(x) for x in out["suggestions"]]
+
+    return out

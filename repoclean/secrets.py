@@ -3,6 +3,7 @@ import math
 import re
 from dataclasses import dataclass
 from pathlib import Path
+import subprocess
 
 
 TEXT_FILE_EXTS = {
@@ -37,6 +38,42 @@ class SecretFinding:
     file: str
     line: int
     preview: str
+
+
+def _git(repo: Path, args: list[str]) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["git", "-C", str(repo), *args],
+        capture_output=True,
+        text=True,
+    )
+
+
+def _get_staged_paths(repo: Path) -> list[str]:
+    """
+    Returns staged file paths relative to repo root (posix format).
+    """
+    try:
+        p = _git(repo, ["diff", "--cached", "--name-only"])
+    except Exception:
+        return []
+
+    if p.returncode != 0:
+        return []
+
+    out = (p.stdout or "").strip()
+    if not out:
+        return []
+
+    staged: list[str] = []
+    for line in out.splitlines():
+        rel = line.strip().replace("\\", "/")
+        if not rel:
+            continue
+        if rel.startswith(".git/"):
+            continue
+        staged.append(rel)
+
+    return staged
 
 
 def mask(s: str, keep_start: int = 4, keep_end: int = 4) -> str:
@@ -225,6 +262,7 @@ def scan_secrets(
     max_kb: int = 256,
     config=None,
     min_severity: str = "low",
+    staged_only: bool = False,
 ) -> list[SecretFinding]:
     """
     Security scanner:
@@ -243,9 +281,28 @@ def scan_secrets(
     # IMPORTANT: dedupe should use normalized raw token, not masked preview
     already_reported_tokens = set()  # (kind, rel, normalized_token)
 
-    for p in repo.rglob("*"):
+    def _iter_target_files() -> list[Path]:
+    # staged-only mode: only check staged files
+        if staged_only:
+            staged_rel_paths = _get_staged_paths(repo)
+            out: list[Path] = []
+            for rel in staged_rel_paths:
+                try:
+                    fp = (repo / rel).resolve()
+                except Exception:
+                    continue
+                if fp.exists() and fp.is_file():
+                    out.append(fp)
+            return out
+
+        # full scan mode
+        return [p for p in repo.rglob("*") if p.is_file()]
+
+
+    for p in _iter_target_files():
         if not p.is_file():
             continue
+
 
         try:
             rel_parts = p.relative_to(repo).parts

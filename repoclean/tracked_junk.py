@@ -104,7 +104,6 @@ def fix_tracked_junk(repo_path: str = ".", tracked_junk: list[str] | None = None
 
     removed: list[str] = []
 
-    # Try to ignore the most common junk in future
     _ensure_gitignore_contains(
         repo,
         [
@@ -119,12 +118,10 @@ def fix_tracked_junk(repo_path: str = ".", tracked_junk: list[str] | None = None
     )
 
     for rel in tracked_junk:
-        # remove from index only
         p = _git(repo, ["rm", "-r", "--cached", "--quiet", "--", rel])
         if p.returncode == 0:
             removed.append(rel)
 
-    # stage .gitignore edits (if any)
     _git(repo, ["add", ".gitignore"])
 
     return len(removed), removed

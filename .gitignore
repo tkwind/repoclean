@@ -22,3 +22,10 @@ node_modules/
 .vscode/
 .idea/
 
+# repoclean tracked junk
+*.pyc
+*.log
+*.tmp
+*.swp
+.DS_Store
+Thumbs.db

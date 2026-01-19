@@ -11,15 +11,86 @@ from repoclean.hooks import install_pre_commit_hook, uninstall_pre_commit_hook
 from repoclean.scanner import scan_repo
 from repoclean.secrets import scan_secrets
 from repoclean.serializer import scanresult_to_dict, secrets_to_dict, to_json
+from repoclean.tracked_junk import get_tracked_junk, fix_tracked_junk
+from repoclean.serializer import trackedjunk_to_dict
+
 
 
 SEVERITY_LEVELS = ["low", "medium", "high", "critical"]
 console = Console()
 
 
+FAIL_CATEGORIES = {
+    "junk",
+    "sensitive",
+    "large",
+    "secrets",
+    # phase 5
+    "tracked-junk",
+    "gitignore",
+    "env",
+}
+
+
 def format_size(num_bytes: int) -> str:
     mb = num_bytes / (1024 * 1024)
     return f"{mb:.1f} MB"
+
+def cmd_tracked_junk(args):
+    res = get_tracked_junk(args.path)
+
+    if args.fix:
+        removed_count, removed = fix_tracked_junk(args.path, tracked_junk=res.tracked_junk)
+        if args.json:
+            payload = {
+                "repo_path": str(res.repo_path),
+                "removed_count": removed_count,
+                "removed": removed,
+            }
+            print(to_json(payload))
+            return
+
+        if removed_count == 0:
+            console.print("[bold green]No tracked junk removed.[/bold green]")
+            return
+
+        console.print(f"[bold green]Removed tracked junk from index:[/bold green] {removed_count}")
+        for p in removed[:50]:
+            console.print(f"  - {p}")
+        if len(removed) > 50:
+            console.print(f"  ... and {len(removed) - 50} more")
+        console.print("\nNow commit:")
+        console.print('  git commit -m "remove tracked junk"')
+        return
+
+    if args.json:
+        print(to_json(trackedjunk_to_dict(res)))
+        return
+
+    if not res.tracked_junk:
+        console.print("\n[bold green]No tracked junk found.[/bold green]")
+        return
+
+    console.print(f"\n[bold yellow]Tracked junk found:[/bold yellow] {len(res.tracked_junk)}\n")
+    for p in res.tracked_junk[:100]:
+        console.print(f"  - {p}")
+    if len(res.tracked_junk) > 100:
+        console.print(f"\n... and {len(res.tracked_junk) - 100} more")
+
+    console.print("\n[bold]Fix it with:[/bold]")
+    console.print("  repoclean tracked-junk --fix")
+
+
+def _parse_fail_on_list(s: str) -> set[str]:
+    raw = {x.strip().lower() for x in (s or "").split(",") if x.strip()}
+    # allow alias
+    normalized = set()
+    for x in raw:
+        if x == "trackedjunk":
+            normalized.add("tracked-junk")
+        else:
+            normalized.add(x)
+    return normalized
 
 
 def cmd_install_hook(args):
@@ -41,12 +112,19 @@ def cmd_ci(args):
 
     max_mb = cfg.max_file_mb
     max_kb = cfg.max_secret_file_kb
-    fail_on = {x.strip().lower() for x in args.fail_on.split(",") if x.strip()}
+    fail_on = _parse_fail_on_list(args.fail_on)
+
+    unknown = sorted({x for x in fail_on if x not in FAIL_CATEGORIES})
+    if unknown:
+        console.print(f"[bold red]Unknown fail-on categories:[/bold red] {', '.join(unknown)}")
+        console.print(f"Valid: {', '.join(sorted(FAIL_CATEGORIES))}")
+        raise SystemExit(2)
 
     scan_result = scan_repo(
         repo_path=args.path,
         max_file_mb=max_mb,
         config=cfg,
+        staged_only=args.staged_only,
     )
 
     secret_findings = scan_secrets(
@@ -56,12 +134,30 @@ def cmd_ci(args):
         min_severity=args.secrets_min_severity,
     )
 
+    # old checks
     failed_junk = ("junk" in fail_on) and ((len(scan_result.junk_dirs) + len(scan_result.junk_files)) > 0)
     failed_sensitive = ("sensitive" in fail_on) and (len(scan_result.sensitive_files) > 0)
     failed_large = ("large" in fail_on) and (len(scan_result.large_files) > 0)
     failed_secrets = ("secrets" in fail_on) and (len(secret_findings) > 0)
 
-    exit_code = 1 if (failed_junk or failed_sensitive or failed_large or failed_secrets) else 0
+    # phase 5 checks (guard for old scan result types)
+    failed_tracked_junk = ("tracked-junk" in fail_on) and (len(getattr(scan_result, "tracked_junk", [])) > 0)
+    failed_gitignore = ("gitignore" in fail_on) and bool(getattr(scan_result, "gitignore_missing", False))
+    failed_env = ("env" in fail_on) and bool(getattr(scan_result, "env_unignored", False))
+
+    exit_code = (
+        1
+        if (
+            failed_junk
+            or failed_sensitive
+            or failed_large
+            or failed_secrets
+            or failed_tracked_junk
+            or failed_gitignore
+            or failed_env
+        )
+        else 0
+    )
 
     if args.json:
         payload = {
@@ -74,21 +170,33 @@ def cmd_ci(args):
                 "sensitive": failed_sensitive,
                 "large": failed_large,
                 "secrets": failed_secrets,
+                "tracked-junk": failed_tracked_junk,
+                "gitignore": failed_gitignore,
+                "env": failed_env,
             },
             "exit_code": exit_code,
+            "mode": "staged-only" if args.staged_only else "full",
         }
         print(to_json(payload))
         raise SystemExit(exit_code)
 
-    console.print("\nrepoclean CI summary\n")
+    console.print("\n[bold]repoclean CI summary[/bold]\n")
     console.print(f"Repo: {scan_result.repo_path}")
+    console.print(f"Mode: {'staged-only' if args.staged_only else 'full'}")
     console.print(f"Fail-on: {', '.join(sorted(fail_on)) if fail_on else '(none)'}")
+
+    console.print(f"Health: {getattr(scan_result, 'repo_health_score', 'n/a')}/100")
     console.print(f"Junk items: {len(scan_result.junk_dirs) + len(scan_result.junk_files)}")
     console.print(f"Sensitive files: {len(scan_result.sensitive_files)}")
+    console.print(f"Tracked junk: {len(getattr(scan_result, 'tracked_junk', []))}")
     console.print(f"Large files: {len(scan_result.large_files)}")
     console.print(f"Secrets found: {len(secret_findings)}")
-    console.print("\nCI status: PASS" if exit_code == 0 else "\nCI status: FAIL")
+    if getattr(scan_result, "gitignore_missing", False):
+        console.print("[bold yellow].gitignore missing[/bold yellow]")
+    if getattr(scan_result, "env_unignored", False):
+        console.print("[bold red].env exists but is not ignored[/bold red]")
 
+    console.print("\nCI status: PASS" if exit_code == 0 else "\nCI status: FAIL")
     raise SystemExit(exit_code)
 
 
@@ -115,6 +223,10 @@ def cmd_scan(args):
     else:
         console.print("")
 
+    # health score is phase 5
+    if hasattr(result, "repo_health_score"):
+        console.print(f"[bold]Repo Health:[/bold] {result.repo_health_score}/100\n")
+
     table = Table(title="repoclean scan results", show_lines=True)
     table.add_column("Category", style="bold")
     table.add_column("Count")
@@ -124,7 +236,42 @@ def cmd_scan(args):
     table.add_row("Junk files", str(len(result.junk_files)), "Safe to ignore/remove")
     table.add_row("Sensitive files", str(len(result.sensitive_files)), "Potential secrets")
     table.add_row("Large files", str(len(result.large_files)), f">{max_mb} MB")
+
+    tracked_junk = getattr(result, "tracked_junk", [])
+    table.add_row("Tracked junk", str(len(tracked_junk)), "Already committed/being tracked")
+
+    table.add_row(
+        ".gitignore",
+        "missing" if getattr(result, "gitignore_missing", False) else "ok",
+        "Required for clean repos",
+    )
+    table.add_row(
+        ".env ignored",
+        "no" if getattr(result, "env_unignored", False) else "yes",
+        ".env should never be tracked",
+    )
+
     console.print(table)
+
+    # phase 5 suggestions
+    if getattr(result, "gitignore_missing", False):
+        console.print("\n[bold yellow]Suggestion:[/bold yellow] Run:")
+        console.print("  repoclean init")
+
+    if getattr(result, "env_unignored", False):
+        console.print("\n[bold red]Danger:[/bold red] .env exists but isn't ignored.")
+        console.print("Add '.env' to .gitignore immediately.")
+
+    if tracked_junk:
+        console.print("\n[bold yellow]Tracked junk detected:[/bold yellow]")
+        for p in tracked_junk[:30]:
+            console.print(f"  - {p}")
+        if len(tracked_junk) > 30:
+            console.print(f"  ... and {len(tracked_junk) - 30} more")
+        console.print("\n[bold]Fix suggestion:[/bold]")
+        console.print("  git rm -r --cached __pycache__")
+        console.print("  git rm --cached *.pyc")
+        console.print("  git commit -m \"remove tracked junk\"")
 
     if result.sensitive_files:
         console.print("\n[bold red]Sensitive files found (review immediately):[/bold red]")
@@ -138,14 +285,24 @@ def cmd_scan(args):
         for p, size in sorted(result.large_files, key=lambda x: x[1], reverse=True)[:20]:
             console.print(f"  - {p} ({format_size(size)})")
 
-    fail_on = {x.strip().lower() for x in args.fail_on.split(",") if x.strip()}
-    fail = False
+    fail_on = _parse_fail_on_list(args.fail_on)
+    unknown = sorted({x for x in fail_on if x not in FAIL_CATEGORIES})
+    if unknown:
+        console.print(f"[bold red]Unknown fail-on categories:[/bold red] {', '.join(unknown)}")
+        raise SystemExit(2)
 
+    fail = False
     if "junk" in fail_on and (len(result.junk_dirs) + len(result.junk_files)) > 0:
         fail = True
     if "sensitive" in fail_on and len(result.sensitive_files) > 0:
         fail = True
     if "large" in fail_on and len(result.large_files) > 0:
+        fail = True
+    if "tracked-junk" in fail_on and len(getattr(result, "tracked_junk", [])) > 0:
+        fail = True
+    if "gitignore" in fail_on and bool(getattr(result, "gitignore_missing", False)):
+        fail = True
+    if "env" in fail_on and bool(getattr(result, "env_unignored", False)):
         fail = True
 
     if fail:
@@ -315,7 +472,7 @@ def cmd_secrets(args):
 
 def main():
     parser = argparse.ArgumentParser(prog="repoclean", description="Repo hygiene scanner")
-    parser.add_argument("--version", action="version", version="repoclean 0.7.0")
+    parser.add_argument("--version", action="version", version="repoclean 0.8.0")
 
     sub = parser.add_subparsers(dest="cmd", required=True)
 
@@ -348,7 +505,11 @@ def main():
     cfg_init.set_defaults(func=cmd_config_init)
 
     scan = sub.add_parser("scan", help="Scan current repo for common issues")
-    scan.add_argument("--fail-on", default="", help="Comma-separated categories: junk,sensitive,large")
+    scan.add_argument(
+        "--fail-on",
+        default="",
+        help="Comma-separated categories: junk,sensitive,large,secrets,tracked-junk,gitignore,env",
+    )
     scan.add_argument("--json", action="store_true", help="Output JSON report")
     scan.add_argument("--path", default=".", help="Path to repo")
     scan.add_argument("--max-mb", type=int, default=None, help="Large file threshold in MB")
@@ -368,8 +529,14 @@ def main():
 
     fix.add_argument("--staged-only", action="store_true", help="Only clean junk staged for commit")
     fix.add_argument("--unstage", action="store_true", help="Only unstage staged junk (do not delete)")
-
     fix.set_defaults(func=cmd_fix)
+    
+    tj = sub.add_parser("tracked-junk", help="Detect / fix junk files already tracked in git history")
+    tj.add_argument("--path", default=".", help="Path to repo")
+    tj.add_argument("--json", action="store_true", help="Output JSON")
+    tj.add_argument("--fix", action="store_true", help="Remove tracked junk from git index (keeps files on disk)")
+    tj.set_defaults(func=cmd_tracked_junk)
+
 
     sec = sub.add_parser("secrets", help="Scan repo for secret/token patterns")
     sec.add_argument("--min-severity", choices=SEVERITY_LEVELS, default="low", help="Minimum severity to report")
@@ -386,7 +553,7 @@ def main():
     ci.add_argument(
         "--fail-on",
         default="secrets,sensitive,large",
-        help="Comma-separated categories: junk,sensitive,large,secrets",
+        help="Comma-separated categories: junk,sensitive,large,secrets,tracked-junk,gitignore,env",
     )
     ci.add_argument(
         "--secrets-min-severity",
@@ -394,6 +561,7 @@ def main():
         default="low",
         help="Minimum severity for secrets failing",
     )
+    ci.add_argument("--staged-only", action="store_true", help="CI checks only staged files")
     ci.set_defaults(func=cmd_ci)
 
     args = parser.parse_args()

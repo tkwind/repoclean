@@ -8,10 +8,24 @@ def to_json(data) -> str:
 
 def scanresult_to_dict(result):
     d = asdict(result)
+
     d["repo_path"] = str(result.repo_path).replace("\\", "/")
-    d["junk_dirs"] = [p.replace("\\", "/") for p in d["junk_dirs"]]
-    d["junk_files"] = [p.replace("\\", "/") for p in d["junk_files"]]
-    d["large_files"] = [{"path": p.replace("\\", "/"), "bytes": size} for (p, size) in result.large_files]
+
+    d["junk_dirs"] = [p.replace("\\", "/") for p in d.get("junk_dirs", [])]
+    d["junk_files"] = [p.replace("\\", "/") for p in d.get("junk_files", [])]
+    d["sensitive_files"] = [p.replace("\\", "/") for p in d.get("sensitive_files", [])]
+
+    d["tracked_junk"] = [p.replace("\\", "/") for p in d.get("tracked_junk", [])]
+
+    d["large_files"] = [
+        {"path": p.replace("\\", "/"), "bytes": size}
+        for (p, size) in getattr(result, "large_files", [])
+    ]
+
+    d["gitignore_missing"] = bool(d.get("gitignore_missing", False))
+    d["env_unignored"] = bool(d.get("env_unignored", False))
+    d["repo_health_score"] = int(d.get("repo_health_score", 0))
+
     return d
 
 
@@ -21,8 +35,15 @@ def secrets_to_dict(findings):
         "findings": [
             {
                 **asdict(f),
-                "file": f.file.replace("\\", "/")
+                "file": f.file.replace("\\", "/"),
             }
             for f in findings
-        ]
+        ],
     }
+
+
+def trackedjunk_to_dict(result):
+    d = asdict(result)
+    d["repo_path"] = str(result.repo_path).replace("\\", "/")
+    d["tracked_junk"] = [p.replace("\\", "/") for p in d.get("tracked_junk", [])]
+    return d

@@ -18,10 +18,16 @@ class ScanResult:
     repo_path: Path
     has_git: bool
     has_gitignore: bool
+
     junk_dirs: list
     junk_files: list
     sensitive_files: list
     large_files: list
+
+    tracked_junk: list
+    gitignore_missing: bool
+    env_unignored: bool
+    repo_health_score: int
 
 
 def is_sensitive(path: Path) -> bool:
@@ -32,13 +38,17 @@ def is_sensitive(path: Path) -> bool:
     return False
 
 
+def _git(repo: Path, args: list[str]) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["git", "-C", str(repo), *args],
+        capture_output=True,
+        text=True,
+    )
+
+
 def _get_staged_paths(repo: Path) -> list[str]:
     try:
-        p = subprocess.run(
-            ["git", "-C", str(repo), "diff", "--cached", "--name-only"],
-            capture_output=True,
-            text=True,
-        )
+        p = _git(repo, ["diff", "--cached", "--name-only"])
     except Exception:
         return []
 
@@ -57,27 +67,110 @@ def _get_staged_paths(repo: Path) -> list[str]:
         if line.startswith(".git/"):
             continue
         staged.append(line)
+
     return staged
 
 
-def _effective_junk_rules(config=None):
-    junk_dirs = set(JUNK_DIRS)
-    junk_files = set(JUNK_FILES)
-    junk_exts = set(JUNK_FILE_EXTS)
+def _get_tracked_paths(repo: Path) -> list[str]:
+    try:
+        p = _git(repo, ["ls-files"])
+    except Exception:
+        return []
 
-    if config:
-        # extend defaults
-        for d in getattr(config, "junk_dirs", []) or []:
-            junk_dirs.add(str(d))
-        for f in getattr(config, "junk_files", []) or []:
-            junk_files.add(str(f))
-        for e in getattr(config, "junk_extensions", []) or []:
-            if not str(e).startswith("."):
-                junk_exts.add("." + str(e))
-            else:
-                junk_exts.add(str(e))
+    if p.returncode != 0:
+        return []
 
-    return junk_dirs, junk_files, junk_exts
+    out = (p.stdout or "").strip()
+    if not out:
+        return []
+
+    tracked = []
+    for line in out.splitlines():
+        rel = line.strip().replace("\\", "/")
+        if not rel:
+            continue
+        if rel.startswith(".git/"):
+            continue
+        tracked.append(rel)
+    return tracked
+
+
+def _is_junk_rel_path(rel_path_posix: str) -> bool:
+    name = rel_path_posix.split("/")[-1]
+    if name in JUNK_FILES:
+        return True
+
+    suffix = Path(name).suffix.lower()
+    if suffix in JUNK_FILE_EXTS:
+        return True
+
+    parts = rel_path_posix.split("/")
+    for part in parts[:-1]:
+        if part in JUNK_DIRS:
+            return True
+
+    return False
+
+
+def _gitignore_ignores_env(repo: Path) -> bool:
+    """
+    Use git check-ignore for truth.
+    If `.env` isn't ignored, it returns non-zero.
+    """
+    env_path = repo / ".env"
+    if not env_path.exists():
+        return True  
+
+    try:
+        p = _git(repo, ["check-ignore", "-q", ".env"])
+        return p.returncode == 0
+    except Exception:
+        try:
+            gi = (repo / ".gitignore").read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            return False
+
+        if ".env" in gi:
+            return True
+        return False
+
+
+def _compute_health_score(
+    *,
+    has_gitignore: bool,
+    env_unignored: bool,
+    junk_count: int,
+    sensitive_count: int,
+    tracked_junk_count: int,
+    large_count: int,
+) -> int:
+    score = 100
+
+    if not has_gitignore:
+        score -= 15
+
+    if env_unignored:
+        score -= 25
+
+    if tracked_junk_count > 0:
+        score -= 20
+
+    if junk_count > 0:
+        score -= 10
+
+    if sensitive_count > 0:
+        score -= 20
+
+    if large_count > 0:
+        score -= 10
+
+    # clamp
+    if score < 0:
+        score = 0
+    if score > 100:
+        score = 100
+
+    return score
 
 
 def scan_repo(
@@ -98,9 +191,26 @@ def scan_repo(
     sensitive_files: list[str] = []
     large_files: list[tuple[str, int]] = []
 
+    tracked_junk: list[str] = []
+    gitignore_missing = False
+    env_unignored = False
+
     max_bytes = max_file_mb * 1024 * 1024
 
-    effective_junk_dirs, effective_junk_files, effective_junk_exts = _effective_junk_rules(config)
+    if has_git and not has_gitignore:
+        gitignore_missing = True
+
+    if has_git and (repo / ".env").exists():
+        if not has_gitignore:
+            env_unignored = True
+        else:
+            env_unignored = not _gitignore_ignores_env(repo)
+
+    if has_git:
+        tracked = _get_tracked_paths(repo)
+        for rel in tracked:
+            if _is_junk_rel_path(rel):
+                tracked_junk.append(rel)
 
     if staged_only:
         staged_rel_paths = _get_staged_paths(repo)
@@ -125,7 +235,7 @@ def scan_repo(
             name = fp.name
             suffix = fp.suffix.lower()
 
-            if name in effective_junk_files or suffix in effective_junk_exts:
+            if name in JUNK_FILES or suffix in JUNK_FILE_EXTS:
                 junk_files.append(rel)
 
             if is_sensitive(fp):
@@ -138,17 +248,29 @@ def scan_repo(
             except Exception:
                 pass
 
+        score = _compute_health_score(
+            has_gitignore=has_gitignore,
+            env_unignored=env_unignored,
+            junk_count=len(junk_files),
+            sensitive_count=len(sensitive_files),
+            tracked_junk_count=len(tracked_junk),
+            large_count=len(large_files),
+        )
+
         return ScanResult(
             repo_path=repo,
             has_git=has_git,
             has_gitignore=has_gitignore,
-            junk_dirs=[],
+            junk_dirs=sorted(set(junk_dirs)),
             junk_files=sorted(set(junk_files)),
             sensitive_files=sorted(set(sensitive_files)),
             large_files=sorted(set(large_files)),
+            tracked_junk=sorted(set(tracked_junk)),
+            gitignore_missing=gitignore_missing,
+            env_unignored=env_unignored,
+            repo_health_score=score,
         )
 
-    # full scan mode
     for root, dirs, files in os.walk(repo):
         root_path = Path(root)
 
@@ -170,7 +292,7 @@ def scan_repo(
                 dirs.remove(d)
 
         for d in list(dirs):
-            if d in effective_junk_dirs:
+            if d in JUNK_DIRS:
                 rel_dir = rel_posix(repo, root_path / d)
 
                 if config and should_ignore(
@@ -195,7 +317,7 @@ def scan_repo(
             ):
                 continue
 
-            if f in effective_junk_files or fp.suffix.lower() in effective_junk_exts:
+            if f in JUNK_FILES or fp.suffix.lower() in JUNK_FILE_EXTS:
                 junk_files.append(rel)
 
             if is_sensitive(fp):
@@ -208,6 +330,15 @@ def scan_repo(
             except Exception:
                 pass
 
+    score = _compute_health_score(
+        has_gitignore=has_gitignore,
+        env_unignored=env_unignored,
+        junk_count=(len(junk_dirs) + len(junk_files)),
+        sensitive_count=len(sensitive_files),
+        tracked_junk_count=len(tracked_junk),
+        large_count=len(large_files),
+    )
+
     return ScanResult(
         repo_path=repo,
         has_git=has_git,
@@ -216,4 +347,8 @@ def scan_repo(
         junk_files=sorted(set(junk_files)),
         sensitive_files=sorted(set(sensitive_files)),
         large_files=sorted(set(large_files)),
+        tracked_junk=sorted(set(tracked_junk)),
+        gitignore_missing=gitignore_missing,
+        env_unignored=env_unignored,
+        repo_health_score=score,
     )

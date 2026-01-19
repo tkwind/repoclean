@@ -1,12 +1,25 @@
-# Repoclean (CLI) v0.6.0
+# Repoclean (CLI) v0.7.0
 
 ![PyPI](https://img.shields.io/pypi/v/repoclean-cli)
 ![License](https://img.shields.io/github/license/tkwind/repoclean)
 ![CI](https://github.com/tkwind/repoclean/actions/workflows/repoclean.yml/badge.svg)
 
-A repo hygiene CLI tool to scan repositories for common junk artifacts, detect secret/token patterns, and optionally install a Git pre-commit hook to prevent leaks.
+
+repoclean — GitHub Repo Cleanup & Secret Leak Prevention CLI
+
+A fast repo hygiene scanner + scary-good secrets detector + pre-commit hook that blocks risky commits automatically.
 
 ## Why repoclean exists
+
+
+Most repo leaks don’t happen because people are careless — they happen because shipping is fast and repo hygiene is manual.
+
+repoclean stops:
+
+- accidental API key/token leaks
+- pushing `.env`, `.pem`, `id_rsa` etc
+- committing junk (`__pycache__/`, `.log`, `.tmp`, `dist/`, etc)
+- committing huge files that bloat history
 
 `repoclean` is a small CLI tool meant to be run before pushing to GitHub. It helps you quickly:
 
@@ -30,6 +43,22 @@ pip install repoclean-cli
 repoclean scan
 repoclean secrets
 ```
+
+
+
+```md
+## Secrets scanner (v0.6.0)
+
+repoclean detects:
+- Private key markers (`BEGIN PRIVATE KEY`)
+- GitHub tokens (`ghp_`, `github_pat_`, `gho_`)
+- Slack tokens (`xoxb-...`)
+- Stripe live keys (`sk_live_...`)
+- Telegram bot tokens (`123456:ABC...`)
+- JWT tokens
+- High entropy secret candidates in assignment contexts
+```
+
 
 ## CI usage
 
@@ -91,6 +120,16 @@ Apply cleanup:
 ```bash
 repoclean fix --yes
 ```
+
+
+
+```md
+### Unstage instead of delete
+
+```bash
+repoclean fix --staged-only --unstage --yes
+```
+
 
 ##### Scan for secrets/tokens
 

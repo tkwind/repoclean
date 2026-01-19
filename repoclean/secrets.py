@@ -54,12 +54,13 @@ def looks_text_file(path: Path) -> bool:
 
 
 def _shannon_entropy(s: str) -> float:
-    # tiny utility, no need to overthink
     if not s:
         return 0.0
+
     freq = {}
     for ch in s:
         freq[ch] = freq.get(ch, 0) + 1
+
     ent = 0.0
     n = float(len(s))
     for count in freq.values():
@@ -69,12 +70,15 @@ def _shannon_entropy(s: str) -> float:
 
 
 def _looks_like_assignment_context(line: str) -> bool:
-    # avoids random-base64 spam
-    return bool(re.search(r"(?i)\b(key|token|secret|passwd|password|api_key|apikey|auth)\b\s*[:=]", line))
+    return bool(
+        re.search(
+            r"(?i)\b(key|token|secret|passwd|password|api_key|apikey|auth|bearer)\b\s*[:=]",
+            line,
+        )
+    )
 
 
 def _extract_candidate_strings(line: str) -> list[str]:
-    # Pull quoted strings / rhs values - keep it conservative
     candidates: list[str] = []
 
     # KEY="value" / KEY='value'
@@ -91,7 +95,6 @@ def _extract_candidate_strings(line: str) -> list[str]:
     for token in re.findall(r"[A-Za-z0-9_\-\/\+=]{20,}", line):
         candidates.append(token)
 
-    # remove junk duplicates
     out = []
     seen = set()
     for c in candidates:
@@ -105,24 +108,34 @@ def _looks_like_high_entropy_secret(candidate: str) -> bool:
     if not candidate:
         return False
 
-    # avoid false positives (paths, ids, etc.)
     if len(candidate) < 24:
         return False
 
-    # too many repeats => likely not a secret
+    # avoid common non-secrets
+    if "/" in candidate or "\\" in candidate:
+        return False
+
+    # too repetitive = probably junk
     if len(set(candidate)) < max(8, len(candidate) // 10):
         return False
 
     ent = _shannon_entropy(candidate)
-    # NOTE: this threshold is tuned to avoid spam
     return ent >= 4.0
 
+
 def _normalize_candidate_token(s: str) -> str:
-    # makes comparisons robust
-    return (s or "").strip().strip("\"'").replace("\\", "")
+    if not s:
+        return ""
+    return (
+        s.strip()
+        .strip("\"'")
+        .replace("\\", "")
+        .replace("\r", "")
+        .replace("\n", "")
+    )
+
 
 def _looks_like_jwt(s: str) -> bool:
-    # JWT = header.payload.signature
     parts = s.split(".")
     if len(parts) != 3:
         return False
@@ -144,7 +157,13 @@ def _looks_like_jwt(s: str) -> bool:
 
 # High precision patterns first (low false positives)
 SECRET_PATTERNS: list[SecretPattern] = [
-    SecretPattern("Private Key Block", "critical", re.compile(r"-----BEGIN ([A-Z ]+)?PRIVATE KEY-----")),
+    SecretPattern(
+        "Private Key Block",
+        "critical",
+        re.compile(r"-----BEGIN ([A-Z ]+)?PRIVATE KEY-----"),
+    ),
+
+    # OpenAI
     SecretPattern("OpenAI API Key", "critical", re.compile(r"\bsk-[A-Za-z0-9]{20,}\b")),
 
     # GitHub
@@ -152,9 +171,16 @@ SECRET_PATTERNS: list[SecretPattern] = [
     SecretPattern("GitHub OAuth Token", "high", re.compile(r"\bgho_[A-Za-z0-9]{20,}\b")),
     SecretPattern("GitHub Fine-grained Token", "high", re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}\b")),
 
+    # GitLab
+    SecretPattern("GitLab Token", "high", re.compile(r"\bglpat-[A-Za-z0-9\-_]{20,}\b")),
+
     # AWS
     SecretPattern("AWS Access Key ID", "high", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
-    SecretPattern("AWS Secret Access Key", "critical", re.compile(r"(?i)\baws_secret_access_key\b\s*[:=]\s*['\"]?[A-Za-z0-9/+=]{32,}")),
+    SecretPattern(
+        "AWS Secret Access Key",
+        "critical",
+        re.compile(r"(?i)\baws_secret_access_key\b\s*[:=]\s*['\"]?[A-Za-z0-9/+=]{32,}"),
+    ),
 
     # Slack
     SecretPattern("Slack Token", "critical", re.compile(r"\bxox[baprs]-[0-9A-Za-z-]{10,}\b")),
@@ -166,16 +192,31 @@ SECRET_PATTERNS: list[SecretPattern] = [
     # Telegram
     SecretPattern("Telegram Bot Token", "high", re.compile(r"\b\d{6,10}:[A-Za-z0-9_-]{25,}\b")),
 
-    # Google API Key (AIza...)
+    # Google
     SecretPattern("Google API Key", "high", re.compile(r"\bAIzaSy[A-Za-z0-9_\-]{20,}\b")),
 
-    # Firebase Admin SDK key file (marker)
-    SecretPattern("Firebase Service Account JSON Marker", "high", re.compile(r'(?i)"type"\s*:\s*"service_account"')),
+    # Firebase Admin SDK key file marker
+    SecretPattern(
+        "Firebase Service Account JSON Marker",
+        "high",
+        re.compile(r'(?i)"type"\s*:\s*"service_account"'),
+    ),
+
+    # Heroku
+    SecretPattern("Heroku API Key", "high", re.compile(r"\b[0-9a-f]{32}\b")),
+
+    # Twilio
+    SecretPattern("Twilio Account SID", "high", re.compile(r"\bAC[a-f0-9]{32}\b")),
+
+    # SendGrid
+    SecretPattern("SendGrid API Key", "high", re.compile(r"\bSG\.[A-Za-z0-9_\-]{16,}\.[A-Za-z0-9_\-]{16,}\b")),
+
+    # Discord (Bot token-like)
+    SecretPattern("Discord Token", "high", re.compile(r"\b[Mm][A-Za-z\d]{23}\.[\w-]{6}\.[\w-]{27}\b")),
 ]
 
-# Generic assignment — but still guarded
 GENERIC_ASSIGNMENT_RGX = re.compile(
-    r"(?i)\b(api[_-]?key|token|secret|password|passwd|auth[_-]?token)\b\s*[:=]\s*['\"]?([A-Za-z0-9_\-\/\+=]{12,})"
+    r"(?i)\b(api[_-]?key|token|secret|password|passwd|auth[_-]?token|bearer)\b\s*[:=]\s*['\"]?([A-Za-z0-9_\-\/\+=]{12,})"
 )
 
 
@@ -199,7 +240,8 @@ def scan_secrets(
     repo = Path(repo_path).resolve()
     findings: list[SecretFinding] = []
 
-    already_reported_signatures = set()  # kind|file|masked_preview
+    # IMPORTANT: dedupe should use normalized raw token, not masked preview
+    already_reported_tokens = set()  # (kind, rel, normalized_token)
 
     for p in repo.rglob("*"):
         if not p.is_file():
@@ -212,7 +254,6 @@ def scan_secrets(
 
         if any(part in SKIP_DIRS for part in rel_parts):
             continue
-
 
         if not looks_text_file(p):
             continue
@@ -243,7 +284,9 @@ def scan_secrets(
             continue
 
         for idx, line in enumerate(text.splitlines(), start=1):
-            already_flagged_candidates_this_line = set()
+            already_flagged_this_line = set()
+
+            # 1) high precision patterns
             for pat in SECRET_PATTERNS:
                 m = pat.rgx.search(line)
                 if not m:
@@ -253,14 +296,13 @@ def scan_secrets(
                     continue
 
                 match_text = m.group(0)
-                masked = mask(match_text)
-                already_flagged_candidates_this_line.add(_normalize_candidate_token(match_text))
+                normalized = _normalize_candidate_token(match_text)
+                already_flagged_this_line.add(normalized)
 
-
-                sig = f"{pat.kind}|{rel}|{masked}"
-                if sig in already_reported_signatures:
+                sig = (pat.kind, rel, normalized)
+                if sig in already_reported_tokens:
                     continue
-                already_reported_signatures.add(sig)
+                already_reported_tokens.add(sig)
 
                 findings.append(
                     SecretFinding(
@@ -268,11 +310,11 @@ def scan_secrets(
                         severity=pat.severity,
                         file=rel,
                         line=idx,
-                        preview=masked,
+                        preview=mask(match_text),
                     )
                 )
 
-            # 2) jwt detection (carefully)
+            # 2) jwt detection
             for token in re.findall(r"[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+", line):
                 if not _looks_like_jwt(token):
                     continue
@@ -281,12 +323,13 @@ def scan_secrets(
                 if SEVERITY_ORDER[sev] < min_sev_val:
                     continue
 
-                masked = mask(token)
-                already_flagged_candidates_this_line.add(_normalize_candidate_token(token))
-                sig = f"JWT|{rel}|{masked}"
-                if sig in already_reported_signatures:
+                normalized = _normalize_candidate_token(token)
+                already_flagged_this_line.add(normalized)
+
+                sig = ("JWT Token", rel, normalized)
+                if sig in already_reported_tokens:
                     continue
-                already_reported_signatures.add(sig)
+                already_reported_tokens.add(sig)
 
                 findings.append(
                     SecretFinding(
@@ -294,71 +337,70 @@ def scan_secrets(
                         severity=sev,
                         file=rel,
                         line=idx,
-                        preview=masked,
+                        preview=mask(token),
                     )
                 )
 
-            # 3) generic assignment (guarded)
+            # 3) generic assignment
             m2 = GENERIC_ASSIGNMENT_RGX.search(line)
             if m2:
                 key_name = (m2.group(1) or "token").lower()
                 raw_value = (m2.group(2) or "").strip()
-                already_flagged_candidates_this_line.add(_normalize_candidate_token(raw_value))
-                # ignore obvious non-secrets
+
+                normalized = _normalize_candidate_token(raw_value)
+                already_flagged_this_line.add(normalized)
+
                 if raw_value.lower() in {"true", "false", "null", "none"}:
                     continue
                 if raw_value.isdigit():
                     continue
 
-                # severity depends on length + entropy
                 sev = "low"
                 if len(raw_value) >= 24 and _looks_like_high_entropy_secret(raw_value):
                     sev = "high"
 
-                if SEVERITY_ORDER[sev] < min_sev_val:
-                    continue
+                if SEVERITY_ORDER[sev] >= min_sev_val:
+                    sig = (f"Generic Secret Assignment ({key_name})", rel, normalized)
+                    if sig not in already_reported_tokens:
+                        already_reported_tokens.add(sig)
+                        findings.append(
+                            SecretFinding(
+                                kind=f"Generic Secret Assignment ({key_name})",
+                                severity=sev,
+                                file=rel,
+                                line=idx,
+                                preview=mask(raw_value),
+                            )
+                        )
 
-                masked = mask(raw_value)
-                sig = f"Generic {key_name}|{rel}|{masked}"
-                if sig in already_reported_signatures:
-                    continue
-                already_reported_signatures.add(sig)
-
-                findings.append(
-                    SecretFinding(
-                        kind=f"Generic Secret Assignment ({key_name})",
-                        severity=sev,
-                        file=rel,
-                        line=idx,
-                        preview=masked,
-                    )
-                )
-
-            # 4) entropy detection - only when assignment-ish to avoid spam
+            # 4) entropy detection (guarded)
             if _looks_like_assignment_context(line):
                 for cand in _extract_candidate_strings(line):
-                    normalized_cand = _normalize_candidate_token(cand)
-                    # if already detected confidently, don't spam entropy finding too
-                    if normalized_cand in already_flagged_candidates_this_line:
+                    normalized = _normalize_candidate_token(cand)
+
+                    if not normalized:
                         continue
-                    if not _looks_like_high_entropy_secret(normalized_cand):
-                        continue
-                    if normalized_cand.lower().startswith(("token", "apikey", "api_key", "secret")):
+                    if normalized in already_flagged_this_line:
                         continue
 
+                    # don't report KEY=... (people love writing TOKEN=ABC... which becomes a cand)
+                    if normalized.lower().startswith(("token", "apikey", "api_key", "secret", "password")):
+                        continue
+
+                    if not _looks_like_high_entropy_secret(normalized):
+                        continue
 
                     sev = "medium"
-                    if len(cand) >= 40:
+                    if len(normalized) >= 40:
                         sev = "high"
 
                     if SEVERITY_ORDER[sev] < min_sev_val:
                         continue
 
-                    masked = mask(normalized_cand)
-                    sig = f"High Entropy Token|{rel}|{masked}"
-                    if sig in already_reported_signatures:
+                    sig = ("High Entropy Token", rel, normalized)
+                    if sig in already_reported_tokens:
                         continue
-                    already_reported_signatures.add(sig)
+                    already_reported_tokens.add(sig)
 
                     findings.append(
                         SecretFinding(
@@ -366,7 +408,7 @@ def scan_secrets(
                             severity=sev,
                             file=rel,
                             line=idx,
-                            preview=masked,
+                            preview=mask(normalized),
                         )
                     )
 

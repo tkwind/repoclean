@@ -8,7 +8,11 @@ max_secret_file_kb = 256
 # Ignore paths (relative to repo root)
 ignore_dirs = ["node_modules", "dist", "build"]
 ignore_files = []
-ignore_extensions = [".log", ".bin"]
+ignore_extensions = [".bin"]
+
+# Junk extensions (treated as safe-to-remove clutter)
+# Example: logs, temp files, etc.
+junk_extensions = [".log", ".tmp", ".swp", ".pyc",".bak"]
 
 # Allow secrets in these folders (relative paths)
 allow_secrets_in = ["tests/", "examples/"]

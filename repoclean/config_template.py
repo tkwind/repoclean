@@ -8,8 +8,15 @@ max_secret_file_kb = 256
 # Ignore paths (relative to repo root)
 ignore_dirs = ["node_modules", "dist", "build"]
 ignore_files = []
-ignore_extensions = [".log", ".bin"]
+ignore_extensions = [".bin"]
 
 # Allow secrets in these folders (relative paths)
 allow_secrets_in = ["tests/", "examples/"]
+
+# --- Optional: Customize junk detection rules ---
+# These EXTEND repoclean defaults (they do not replace them)
+
+junk_dirs = []
+junk_files = []
+junk_extensions = []
 """

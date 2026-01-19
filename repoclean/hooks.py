@@ -1,10 +1,9 @@
 from pathlib import Path
-import textwrap
+
 try:
     import tomllib as tomli
 except ModuleNotFoundError:
     import tomli
-
 
 
 HOOK_META_FILE = "repoclean_hook.toml"
@@ -17,6 +16,7 @@ def find_git_dir(repo_path: Path) -> Path | None:
     if (p / ".git").is_dir():
         return p / ".git"
     return None
+
 
 def get_hook_status(repo_path: str = ".") -> dict:
     repo = Path(repo_path).resolve()
@@ -50,7 +50,6 @@ def get_hook_status(repo_path: str = ".") -> dict:
     return status
 
 
-
 def build_pre_commit_script(mode: str = "strict") -> str:
     mode = mode.lower().strip()
     if mode not in {"strict", "warn"}:
@@ -63,7 +62,15 @@ def build_pre_commit_script(mode: str = "strict") -> str:
 
     return f"""#!/bin/sh
 {HOOK_MARKER_BEGIN}
-python - <<'PY'
+
+# Prefer python3 if available, fallback to python
+if command -v python3 >/dev/null 2>&1; then
+  PYTHON_BIN=python3
+else
+  PYTHON_BIN=python
+fi
+
+"$PYTHON_BIN" - <<'PY'
 import json
 import subprocess
 import sys
@@ -71,23 +78,42 @@ import sys
 MODE = {mode!r}
 FAIL_ON = {fail_on!r}
 
-p = subprocess.run(
-    ["repoclean", "ci", "--json", "--fail-on", FAIL_ON],
-    capture_output=True,
-    text=True,
-)
+def run_repoclean(args):
+    try:
+        return subprocess.run(
+            ["repoclean", *args],
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        print("repoclean hook: 'repoclean' command not found.")
+        print("Install it via: pip install repoclean-cli")
+        sys.exit(2)
+
+# 0) auto-clean staged junk before commit
+fx = run_repoclean(["fix", "--staged-only", "--yes"])
+if fx.returncode != 0:
+    print("repoclean hook: fix failed")
+    err = (fx.stderr or fx.stdout or "").strip()
+    if err:
+        print(err[:2000])
+    sys.exit(2)
+
+# 1) run CI checks
+p = run_repoclean(["ci", "--json", "--fail-on", FAIL_ON])
 
 out = (p.stdout or "").strip()
-
 try:
     report = json.loads(out) if out else {{}}
 except Exception:
-    print("repoclean hook: failed to parse JSON output")
+    print("repoclean hook: failed to parse JSON output from repoclean ci")
+    if out:
+        print("repoclean output:")
+        print(out[:2000])
     sys.exit(2)
 
 failed = report.get("failed", {{}})
 failed_secrets = bool(failed.get("secrets", False))
-
 exit_code = int(report.get("exit_code", p.returncode))
 
 # 1) always block on secrets
@@ -107,11 +133,12 @@ if exit_code != 0 and MODE == "warn":
 
 sys.exit(0)
 PY
+
 status=$?
 exit $status
+
 {HOOK_MARKER_END}
 """
-
 
 
 
@@ -141,13 +168,11 @@ def install_pre_commit_hook(repo_path: str = ".", mode: str = "strict") -> tuple
     hooks_dir.mkdir(parents=True, exist_ok=True)
 
     hook_path = hooks_dir / "pre-commit"
-
     content = build_pre_commit_script(mode=mode)
 
     if hook_path.exists():
         existing = hook_path.read_text(encoding="utf-8", errors="ignore")
 
-        # If our block exists -> replace it (update mode in-place)
         if HOOK_MARKER_BEGIN in existing and HOOK_MARKER_END in existing:
             start = existing.index(HOOK_MARKER_BEGIN)
             end = existing.index(HOOK_MARKER_END) + len(HOOK_MARKER_END)
@@ -160,7 +185,6 @@ def install_pre_commit_hook(repo_path: str = ".", mode: str = "strict") -> tuple
                 + existing[end:].lstrip()
             )
             hook_path.write_text(new_content, encoding="utf-8")
-
             write_hook_meta(git_dir, mode)
 
             try:
@@ -170,7 +194,6 @@ def install_pre_commit_hook(repo_path: str = ".", mode: str = "strict") -> tuple
 
             return True, f"Updated repoclean pre-commit hook mode to {mode}."
 
-        # If hook exists but no repoclean block -> append ours
         new_content = existing.rstrip() + "\n\n" + content
         hook_path.write_text(new_content, encoding="utf-8")
     else:
@@ -184,7 +207,6 @@ def install_pre_commit_hook(repo_path: str = ".", mode: str = "strict") -> tuple
         pass
 
     return True, f"Installed pre-commit hook at {hook_path}"
-
 
 
 def uninstall_pre_commit_hook(repo_path: str = ".") -> tuple[bool, str]:
